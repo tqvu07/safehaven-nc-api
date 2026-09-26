@@ -1,22 +1,24 @@
 """
 SafeHaven NC — Emergency Resilience and Adaptive Shelter Router
+Version 3.0.0 — Full 100-county NC coverage
 Carolina Data Challenge
 
-Single-file async FastAPI service providing:
-  - Dynamic county + FIPS resolution via US Census TIGERweb REST API
-  - Dynamic FEMA BCAT building-code lookup via FEMA GeoPlatform REST API
-  - Live FEMA National Shelter System (NSS) ingestion with nc_shelters.json fallback
-  - HAZUS-style structural vulnerability / predicted-damage scoring
-  - Survivable-shelter filtering and routing (Haversine + Google Maps links)
-  - Live multi-metric weather via Open-Meteo
+Architecture
+────────────
+Startup  : Bulk FEMA BCAT ingestion for all 100 NC counties → STATEWIDE_BCAT dict
+Runtime  : Census TIGERweb spatial geocoding → O(1) STATEWIDE_BCAT lookup (no per-request BCAT call)
+Parallel : weather + NSS shelters fire concurrently with county geocoding
+Routing  : Statewide Haversine ranking across every NC shelter record
+Lineage  : data_sources block in every EvaluateResponse
 """
 
 import asyncio
 import json
 import math
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -25,83 +27,75 @@ from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
-# App setup
+# File paths
 # ---------------------------------------------------------------------------
 
-app = FastAPI(
-    title="SafeHaven NC",
-    description="Emergency resilience and adaptive shelter router for the NC Triangle region.",
-    version="2.0.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.get("/")
-async def root() -> Dict[str, str]:
-    return {"service": "SafeHaven NC API", "status": "online", "docs": "/docs"}
+_HERE = Path(__file__).parent
+NC_BCAT_FALLBACK_PATH = _HERE / "nc_bcat_statewide.json"
+NC_SHELTERS_FALLBACK_PATH = _HERE / "nc_shelters.json"
 
 
 # ---------------------------------------------------------------------------
-# Constants
+# External API endpoints
 # ---------------------------------------------------------------------------
 
-# Hard 5-second wall-clock limit on every outbound request.
-REQUEST_TIMEOUT = 5.0
-
-# US Census TIGERweb — county spatial query (State_County layer 1).
 CENSUS_COUNTY_URL = (
     "https://tigerweb.geo.census.gov/arcgis/rest/services/"
     "TIGERweb/State_County/MapServer/1/query"
 )
-
-# FEMA GeoPlatform — Building Code Adoption Tracking (BCAT).
 FEMA_BCAT_URL = (
     "https://gis.fema.gov/arcgis/rest/services/FEMA/BCAT_County/MapServer/0/query"
 )
-
-# FEMA National Shelter System — open / active shelters (ArcGIS FeatureServer).
 NSS_SHELTERS_URL = (
     "https://services1.arcgis.com/Hp6G80Pky0om7QvQ/arcgis/rest/services/"
     "National_Shelter_System_Open_Shelters/FeatureServer/0/query"
 )
-
-# Open-Meteo free forecast API.
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
-# Companion fallback file — used when NSS returns 0 active NC shelters.
-# See nc_shelters.json for the expected array-of-objects schema.
-NC_SHELTERS_FALLBACK_PATH = Path(__file__).parent / "nc_shelters.json"
 
-# HAZUS structure vulnerability multipliers (damage and score).
+# ---------------------------------------------------------------------------
+# Tunable constants
+# ---------------------------------------------------------------------------
+
+REQUEST_TIMEOUT: float = 5.0
+
+# Shelter routing
+NSS_DEFAULT_WIND_RATING_MPH: float = 110.0  # IBC Risk Category III minimum
+MAX_SHELTERS_RETURNED: int = 5
+
+# HAZUS vulnerability
 STRUCTURE_MULTIPLIERS: Dict[str, float] = {
     "mobile_home": 2.2,
     "single_family": 1.0,
     "multi_family": 0.7,
 }
-
-# Baseline replacement values used in the piecewise damage curve.
 STRUCTURE_BASE_VALUE_USD: Dict[str, int] = {
     "mobile_home": 80_000,
     "single_family": 300_000,
     "multi_family": 550_000,
 }
 
-# NSS data carries no structural wind rating; apply IBC Risk Category III
-# minimum (~110 mph design speed) as a conservative default for all live
-# NSS shelters that lack an explicit field.
-NSS_DEFAULT_WIND_RATING_MPH: float = 110.0
+# Cache TTLs (seconds)
+TTL_COUNTY: float = 3_600.0    # 1 hour  — county boundaries are stable
+TTL_SHELTERS: float = 900.0    # 15 min  — NSS populations update frequently
 
-# Cache TTLs (seconds).
-TTL_COUNTY = 3_600       # 1 hour  — county boundaries are stable
-TTL_BCAT = 86_400        # 24 hours — code adoption data changes rarely
-TTL_SHELTERS = 900       # 15 minutes — live shelter populations update often
+# Conservative defaults applied when a county FIPS is absent from STATEWIDE_BCAT.
+# "Not Resistant" is intentionally conservative for emergency management purposes.
+_DEFAULT_BCAT: Dict[str, str] = {
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "Standard NC Code",
+}
+
+
+# ---------------------------------------------------------------------------
+# Module-level state — populated during startup, never mutated at runtime
+# ---------------------------------------------------------------------------
+
+# Maps 5-digit FIPS → {bcat_wind_resistance, bcat_flood_resistance, building_code_era}
+# for every NC county. Populated by ingest_statewide_bcat() at process start.
+STATEWIDE_BCAT: Dict[str, Dict[str, str]] = {}
+BCAT_SOURCE: str = "FEMA_BCAT_STATEWIDE_FALLBACK"
 
 
 # ---------------------------------------------------------------------------
@@ -111,9 +105,9 @@ TTL_SHELTERS = 900       # 15 minutes — live shelter populations update often
 class _CacheEntry:
     __slots__ = ("value", "expires_at")
 
-    def __init__(self, value: Any, ttl_seconds: float) -> None:
+    def __init__(self, value: Any, ttl: float) -> None:
         self.value = value
-        self.expires_at = time.monotonic() + ttl_seconds
+        self.expires_at = time.monotonic() + ttl
 
 
 _CACHE: Dict[str, _CacheEntry] = {}
@@ -127,8 +121,192 @@ def cache_get(key: str) -> Optional[Any]:
     return None
 
 
-def cache_set(key: str, value: Any, ttl_seconds: float) -> None:
-    _CACHE[key] = _CacheEntry(value, ttl_seconds)
+def cache_set(key: str, value: Any, ttl: float) -> None:
+    _CACHE[key] = _CacheEntry(value, ttl)
+
+
+# ---------------------------------------------------------------------------
+# Shared utility helpers
+# ---------------------------------------------------------------------------
+
+def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance between two WGS-84 points, in miles."""
+    r = 3958.8
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lam = math.radians(lon2 - lon1)
+    a = (
+        math.sin(d_phi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(d_lam / 2) ** 2
+    )
+    return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _parse_bool_field(value: Any, truthy: tuple = ("yes", "1", "true", "y")) -> bool:
+    return str(value).strip().lower() in truthy
+
+
+def _resistant_label(raw: Any) -> str:
+    """Map a raw BCAT field value to 'Resistant' or 'Not Resistant'."""
+    return (
+        "Resistant"
+        if _parse_bool_field(raw, ("yes", "1", "true", "resistant", "y"))
+        else "Not Resistant"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Startup: bulk FEMA BCAT ingestion for all 100 NC counties
+# ---------------------------------------------------------------------------
+
+async def ingest_statewide_bcat() -> None:
+    """
+    Fetch all NC county BCAT records from FEMA GeoPlatform and index them in
+    STATEWIDE_BCAT by 5-digit FIPS code.
+
+    Priority order:
+      1. FEMA live service (STATE = 'NC' query, all outFields)
+      2. nc_bcat_statewide.json local fallback
+      3. Empty dict — per-county lookups fall back to _DEFAULT_BCAT
+
+    Called once at process startup via the lifespan context manager.
+    """
+    global STATEWIDE_BCAT, BCAT_SOURCE
+
+    params = {
+        "where": "STATE = 'NC'",
+        "outFields": (
+            "COUNTY,COUNTY_FIPS,WIND_RESISTANT,FLOOD_RESISTANT,"
+            "CODE_EDITION,BCAT_STATUS"
+        ),
+        "returnGeometry": "false",
+        "f": "json",
+    }
+
+    live_features: List[Dict[str, Any]] = []
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        try:
+            resp = await client.get(FEMA_BCAT_URL, params=params)
+            resp.raise_for_status()
+            live_features = resp.json().get("features", [])
+        except (httpx.TimeoutException, httpx.HTTPError) as exc:
+            print(
+                f"[SafeHaven startup] FEMA BCAT live fetch failed ({exc}); "
+                "falling back to nc_bcat_statewide.json."
+            )
+
+    if live_features:
+        bcat_map: Dict[str, Dict[str, str]] = {}
+        for feat in live_features:
+            attrs = feat.get("attributes", {})
+            fips = str(attrs.get("COUNTY_FIPS") or "").strip().zfill(5)
+            if len(fips) != 5 or fips == "00000":
+                continue
+            bcat_map[fips] = {
+                "bcat_wind_resistance": _resistant_label(
+                    attrs.get("WIND_RESISTANT", "no")
+                ),
+                "bcat_flood_resistance": _resistant_label(
+                    attrs.get("FLOOD_RESISTANT", "no")
+                ),
+                "building_code_era": str(
+                    attrs.get("CODE_EDITION") or "Standard NC Code"
+                ).strip(),
+            }
+        STATEWIDE_BCAT = bcat_map
+        BCAT_SOURCE = "FEMA_BCAT_STATEWIDE_LIVE"
+        print(
+            f"[SafeHaven startup] BCAT ingestion complete — "
+            f"{len(STATEWIDE_BCAT)} NC counties loaded from FEMA live service."
+        )
+        return
+
+    # ── Fallback: nc_bcat_statewide.json ────────────────────────────────────
+    if NC_BCAT_FALLBACK_PATH.exists():
+        try:
+            records: List[Dict[str, Any]] = json.loads(
+                NC_BCAT_FALLBACK_PATH.read_text(encoding="utf-8")
+            )
+            bcat_map = {}
+            for rec in records:
+                fips = str(rec.get("county_fips") or "").strip().zfill(5)
+                if len(fips) != 5 or fips == "00000":
+                    continue
+                bcat_map[fips] = {
+                    "bcat_wind_resistance": str(
+                        rec.get("bcat_wind_resistance", "Not Resistant")
+                    ),
+                    "bcat_flood_resistance": str(
+                        rec.get("bcat_flood_resistance", "Not Resistant")
+                    ),
+                    "building_code_era": str(
+                        rec.get("building_code_era", "Standard NC Code")
+                    ),
+                }
+            STATEWIDE_BCAT = bcat_map
+            BCAT_SOURCE = "FEMA_BCAT_STATEWIDE_FALLBACK"
+            print(
+                f"[SafeHaven startup] BCAT loaded from local fallback — "
+                f"{len(STATEWIDE_BCAT)} counties."
+            )
+        except (json.JSONDecodeError, OSError) as exc:
+            print(
+                f"[SafeHaven startup] WARNING: nc_bcat_statewide.json unreadable "
+                f"({exc}). All counties will use conservative defaults."
+            )
+    else:
+        print(
+            "[SafeHaven startup] WARNING: nc_bcat_statewide.json not found. "
+            "All counties will use conservative defaults."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Lifespan context manager
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):  # noqa: RUF029
+    await ingest_statewide_bcat()
+    yield
+    # Graceful shutdown hooks can be added here (e.g., close DB connections).
+
+
+# ---------------------------------------------------------------------------
+# App setup
+# ---------------------------------------------------------------------------
+
+app = FastAPI(
+    title="SafeHaven NC",
+    description=(
+        "Emergency resilience and adaptive shelter router — full 100-county "
+        "NC statewide coverage via live FEMA BCAT + Census TIGERweb APIs."
+    ),
+    version="3.0.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/")
+async def root() -> Dict[str, Any]:
+    return {
+        "service": "SafeHaven NC API",
+        "version": "3.0.0",
+        "coverage": "100 NC counties",
+        "status": "online",
+        "bcat_source": BCAT_SOURCE,
+        "bcat_counties_loaded": len(STATEWIDE_BCAT),
+        "docs": "/docs",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +317,9 @@ class EvaluateRequest(BaseModel):
     lat: float
     lon: float
     year_built: int
-    structure_type: str = Field(..., description="mobile_home | single_family | multi_family")
+    structure_type: str = Field(
+        ..., description="mobile_home | single_family | multi_family"
+    )
     scenario_wind_mph: Optional[float] = None
 
 
@@ -167,6 +347,15 @@ class ShelterResult(BaseModel):
     navigation_url: str
 
 
+class DataSources(BaseModel):
+    county_resolution: str
+    # "US_CENSUS_TIGERWEB_LIVE"
+    bcat_rating: str
+    # "FEMA_BCAT_STATEWIDE_LIVE" | "FEMA_BCAT_STATEWIDE_FALLBACK" | "FEMA_BCAT_DEFAULT"
+    shelter_source: str
+    # "FEMA_NSS_LIVE" | "LOCAL_STATEWIDE_INVENTORY"
+
+
 class EvaluateResponse(BaseModel):
     county_name: str
     county_fips: str
@@ -179,62 +368,30 @@ class EvaluateResponse(BaseModel):
     recommendation: str
     weather: WeatherInfo
     survivable_shelters: List[ShelterResult]
-
-
-# ---------------------------------------------------------------------------
-# Shared utility helpers
-# ---------------------------------------------------------------------------
-
-def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Great-circle distance between two points, in miles."""
-    r = 3958.8
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    d_phi = math.radians(lat2 - lat1)
-    d_lam = math.radians(lon2 - lon1)
-    a = (
-        math.sin(d_phi / 2) ** 2
-        + math.cos(phi1) * math.cos(phi2) * math.sin(d_lam / 2) ** 2
-    )
-    return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-
-def _parse_bool_field(
-    value: Any,
-    truthy: tuple = ("yes", "1", "true", "y"),
-) -> bool:
-    """Normalise string/int/bool field values to Python bool."""
-    return str(value).strip().lower() in truthy
-
-
-def _resistant_label(raw: Any) -> str:
-    """Map a raw BCAT field value to 'Resistant' or 'Not Resistant'."""
-    return (
-        "Resistant"
-        if _parse_bool_field(raw, ("yes", "1", "true", "resistant", "y"))
-        else "Not Resistant"
-    )
+    data_sources: DataSources
 
 
 # ---------------------------------------------------------------------------
 # External API clients
 # ---------------------------------------------------------------------------
 
-async def resolve_county(lat: float, lon: float) -> Dict[str, str]:
+async def resolve_county(
+    lat: float, lon: float
+) -> Tuple[Dict[str, str], str]:
     """
-    Resolve county name and 5-digit FIPS from coordinates via the Census
-    TIGERweb State_County MapServer (layer 1).
+    Spatial geocoding via US Census TIGERweb State_County layer.
+    Covers any US county — no bounding boxes, no hard-coded limits.
 
-    Returns a dict with keys:
-        county_name       – display name, e.g. "Orange County"
-        county_name_clean – bare name for API queries, e.g. "Orange"
-        county_fips       – 5-digit string, e.g. "37135"
+    Returns:
+        (county_dict, source_label)
+        county_dict keys: county_name, county_name_clean, county_fips
 
-    Cache TTL: 1 hour (keyed to lat/lon rounded to 2 decimal places ≈ 1 km).
+    Cache TTL: 1 hour, keyed to lat/lon rounded to 2 decimal places (~1 km).
     """
     cache_key = f"county_{round(lat, 2)}_{round(lon, 2)}"
     cached = cache_get(cache_key)
     if cached is not None:
-        return cached  # type: ignore[return-value]
+        return cached, "US_CENSUS_TIGERWEB_LIVE"
 
     params = {
         "geometry": f"{lon},{lat}",
@@ -265,10 +422,8 @@ async def resolve_county(lat: float, lon: float) -> Dict[str, str]:
         )
 
     attrs = features[0]["attributes"]
-    bare_name: str = str(attrs.get("NAME", "Unknown")).strip()
-    fips: str = str(attrs.get("GEOID", "00000")).strip()
-
-    # TIGERweb NAME is the bare county name without the "County" suffix.
+    bare_name = str(attrs.get("NAME", "Unknown")).strip()
+    fips = str(attrs.get("GEOID", "00000")).strip()
     display_name = (
         bare_name if "county" in bare_name.lower() else f"{bare_name} County"
     )
@@ -278,71 +433,17 @@ async def resolve_county(lat: float, lon: float) -> Dict[str, str]:
         "county_name_clean": bare_name,
         "county_fips": fips,
     }
-    cache_set(cache_key, result, ttl_seconds=TTL_COUNTY)
-    return result
-
-
-async def fetch_bcat(fips: str, county_name_clean: str) -> Dict[str, str]:
-    """
-    Fetch FEMA BCAT building-code attributes (wind resistance, flood
-    resistance, code edition) for a county identified by FIPS or name.
-
-    Cache TTL: 24 hours. Falls back gracefully to conservative defaults
-    on timeout or if the county record is absent from the dataset.
-    """
-    cache_key = f"bcat_{fips}"
-    cached = cache_get(cache_key)
-    if cached is not None:
-        return cached  # type: ignore[return-value]
-
-    _fallback: Dict[str, str] = {
-        "bcat_wind_resistance": "Not Resistant",
-        "bcat_flood_resistance": "Not Resistant",
-        "building_code_era": "Legacy NC Code",
-    }
-
-    params = {
-        "where": (
-            f"COUNTY_FIPS = '{fips}' OR "
-            f"(COUNTY = '{county_name_clean}' AND STATE = 'NC')"
-        ),
-        "outFields": "COUNTY,WIND_RESISTANT,FLOOD_RESISTANT,CODE_EDITION,BCAT_STATUS",
-        "returnGeometry": "false",
-        "f": "json",
-    }
-
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-        try:
-            resp = await client.get(FEMA_BCAT_URL, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-        except (httpx.TimeoutException, httpx.HTTPError):
-            # Do not crash — return conservative defaults and cache them.
-            cache_set(cache_key, _fallback, ttl_seconds=TTL_BCAT)
-            return _fallback
-
-    features = data.get("features", [])
-    if not features:
-        cache_set(cache_key, _fallback, ttl_seconds=TTL_BCAT)
-        return _fallback
-
-    attrs = features[0]["attributes"]
-    result: Dict[str, str] = {
-        "bcat_wind_resistance": _resistant_label(attrs.get("WIND_RESISTANT", "no")),
-        "bcat_flood_resistance": _resistant_label(attrs.get("FLOOD_RESISTANT", "no")),
-        "building_code_era": str(attrs.get("CODE_EDITION") or "Standard NC Code").strip(),
-    }
-    cache_set(cache_key, result, ttl_seconds=TTL_BCAT)
-    return result
+    cache_set(cache_key, result, TTL_COUNTY)
+    return result, "US_CENSUS_TIGERWEB_LIVE"
 
 
 async def fetch_weather(lat: float, lon: float) -> WeatherInfo:
     """
     Fetch live multi-metric weather from Open-Meteo:
-      - current_temp_f           Current 2 m air temperature (°F)
-      - sustained_wind_mph       Current 10 m wind speed (mph)
-      - wind_gusts_mph           Peak 10 m gust over the next 24 hours (mph)
-      - precipitation_next_24h_in  Accumulated precipitation over 24 h (inches)
+      - current_temp_f             Current 2 m temperature (°F)
+      - wind_gusts_mph             Peak 10 m gust over next 24 h (mph)
+      - sustained_wind_mph         Current 10 m wind speed (mph)
+      - precipitation_next_24h_in  Total 24 h accumulated precipitation (in)
     """
     params = {
         "latitude": lat,
@@ -365,48 +466,23 @@ async def fetch_weather(lat: float, lon: float) -> WeatherInfo:
 
     current = data.get("current_weather", {})
     hourly = data.get("hourly", {})
-
-    current_temp_f = float(current.get("temperature", 0.0))
-    sustained_mph = float(current.get("windspeed", 0.0))
-
-    gusts: List[float] = [
-        float(g) for g in hourly.get("wind_gusts_10m", []) if g is not None
-    ]
-    precip: List[float] = [
-        float(p) for p in hourly.get("precipitation", []) if p is not None
-    ]
-
-    peak_gust_mph = max(gusts) if gusts else sustained_mph
-    total_precip_in = round(sum(precip), 3)
+    gusts = [float(g) for g in hourly.get("wind_gusts_10m", []) if g is not None]
+    precip = [float(p) for p in hourly.get("precipitation", []) if p is not None]
 
     return WeatherInfo(
-        current_temp_f=round(current_temp_f, 1),
-        wind_gusts_mph=round(peak_gust_mph, 1),
-        sustained_wind_mph=round(sustained_mph, 1),
-        precipitation_next_24h_in=total_precip_in,
+        current_temp_f=round(float(current.get("temperature", 0.0)), 1),
+        wind_gusts_mph=round(
+            max(gusts) if gusts else float(current.get("windspeed", 0.0)), 1
+        ),
+        sustained_wind_mph=round(float(current.get("windspeed", 0.0)), 1),
+        precipitation_next_24h_in=round(sum(precip), 3),
     )
 
 
+# ── Shelter data helpers ─────────────────────────────────────────────────────
+
 def _load_nc_shelters_fallback() -> List[Dict[str, Any]]:
-    """
-    Load the designated-facility inventory from nc_shelters.json.
-
-    Expected JSON schema — array of objects with these fields:
-      name                str   Facility display name
-      county              str   County name (bare, e.g. "Orange")
-      lat                 float WGS-84 latitude
-      lon                 float WGS-84 longitude
-      max_wind_rating_mph float Structural wind survival limit
-      evacuation_capacity int   Total rated occupancy
-      total_population    int   Current occupant count (0 = unoccupied)
-      shelter_status      str   e.g. "DESIGNATED" | "OPEN" | "CLOSED"
-      pet_friendly        bool
-      ada_accessible      bool
-      generator           bool
-
-    Returns an empty list on any read / parse error so the endpoint can
-    still respond (with an empty shelter list) rather than crash.
-    """
+    """Load nc_shelters.json; silently returns [] on any error."""
     if not NC_SHELTERS_FALLBACK_PATH.exists():
         return []
     try:
@@ -416,26 +492,22 @@ def _load_nc_shelters_fallback() -> List[Dict[str, Any]]:
 
 
 def _normalise_nss_feature(feat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    Convert a single GeoJSON Feature from the NSS FeatureServer into the
-    internal shelter dict schema.  Returns None for features with no geometry.
-    """
+    """Convert a GeoJSON NSS Feature to the internal shelter dict. Returns None on bad geometry."""
     geom = feat.get("geometry") or {}
     coords = geom.get("coordinates", [])
     if len(coords) < 2 or coords[0] is None or coords[1] is None:
         return None
 
-    lon, lat = float(coords[0]), float(coords[1])
+    lon_f, lat_f = float(coords[0]), float(coords[1])
     props = feat.get("properties") or {}
-
     evac_cap = int(props.get("EVACUATION_CAPACITY") or 300)
     total_pop = int(props.get("TOTAL_POPULATION") or 0)
 
     return {
         "name": str(props.get("SHELTER_NAME") or "Unnamed Shelter").strip(),
         "county": str(props.get("COUNTY") or "Unknown").strip(),
-        "lat": lat,
-        "lon": lon,
+        "lat": lat_f,
+        "lon": lon_f,
         "max_wind_rating_mph": NSS_DEFAULT_WIND_RATING_MPH,
         "evacuation_capacity": evac_cap,
         "total_population": total_pop,
@@ -448,10 +520,7 @@ def _normalise_nss_feature(feat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _normalise_fallback_record(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Normalise a single nc_shelters.json object into the internal shelter dict
-    schema, filling in any missing fields with safe defaults.
-    """
+    """Normalise a nc_shelters.json record to the internal shelter dict schema."""
     evac_cap = int(raw.get("evacuation_capacity", raw.get("capacity", 300)))
     total_pop = int(raw.get("total_population", 0))
     return {
@@ -472,14 +541,15 @@ def _normalise_fallback_record(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-async def fetch_shelters() -> List[Dict[str, Any]]:
+async def fetch_shelters() -> Tuple[List[Dict[str, Any]], str]:
     """
-    Fetch open NC emergency shelters from the FEMA NSS ArcGIS FeatureServer.
+    Fetch NC emergency shelters from the FEMA NSS ArcGIS FeatureServer.
+    Returns (shelters, source_label).
 
     Cache TTL: 15 minutes.
-
-    Fallback: if the live feed returns 0 records (no active NC disaster
-    declaration), load the designated-facility inventory from nc_shelters.json.
+    Fallback: nc_shelters.json when NSS returns 0 records (no active NC
+    disaster declaration). The fallback file should contain the full
+    statewide designated-facility inventory.
     """
     cache_key = "nss_shelters_nc"
     cached = cache_get(cache_key)
@@ -496,36 +566,34 @@ async def fetch_shelters() -> List[Dict[str, Any]]:
     }
 
     shelters: List[Dict[str, Any]] = []
+    source_label = "FEMA_NSS_LIVE"
 
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         try:
             resp = await client.get(NSS_SHELTERS_URL, params=params)
             resp.raise_for_status()
-            data = resp.json()
-            features: List[Dict[str, Any]] = data.get("features", [])
+            for feat in resp.json().get("features", []):
+                norm = _normalise_nss_feature(feat)
+                if norm is not None:
+                    shelters.append(norm)
         except (httpx.TimeoutException, httpx.HTTPError):
-            features = []
-
-    for feat in features:
-        normalised = _normalise_nss_feature(feat)
-        if normalised is not None:
-            shelters.append(normalised)
+            pass  # fall through to local fallback
 
     if not shelters:
-        # No active disaster shelters open — use designated-facility fallback.
+        source_label = "LOCAL_STATEWIDE_INVENTORY"
         for raw in _load_nc_shelters_fallback():
             try:
                 shelters.append(_normalise_fallback_record(raw))
             except (KeyError, ValueError, TypeError):
-                # Skip malformed records rather than crashing.
-                continue
+                continue  # skip malformed records
 
-    cache_set(cache_key, shelters, ttl_seconds=TTL_SHELTERS)
-    return shelters
+    result = (shelters, source_label)
+    cache_set(cache_key, result, TTL_SHELTERS)
+    return result
 
 
 # ---------------------------------------------------------------------------
-# Vulnerability & recommendation logic (HAZUS-style piecewise curve)
+# HAZUS-style vulnerability scoring
 # ---------------------------------------------------------------------------
 
 def calculate_vulnerability(
@@ -535,14 +603,13 @@ def calculate_vulnerability(
     storm_wind_mph: float,
 ) -> Dict[str, Any]:
     """
-    HAZUS-style piecewise wind-damage curve anchored to Saffir-Simpson
-    thresholds.  Returns vulnerability_score (0–100) and predicted_damage_usd.
+    HAZUS-style piecewise wind-damage curve anchored to Saffir-Simpson thresholds.
 
-    Wind-anchored score bands (hard-bounded to prevent bleed-over):
-        < 40 mph  →  LOW        score  0–19   $0 structural damage
-        40–73 mph →  MODERATE   score 20–49   1–5 % of base value
-        74–95 mph →  HIGH       score 50–74   5–20 %
-        96+ mph   →  EVACUATE   score 75–100  20–100 %
+    Score bands (hard-bounded so calm conditions never bleed into MODERATE+):
+        < 40 mph  → LOW        0–19    $0 structural damage
+        40–73 mph → MODERATE  20–49    1–5 % of base value
+        74–95 mph → HIGH      50–74    5–20 %
+        96+ mph   → EVACUATE  75–100  20–100 %
     """
     if structure_type not in STRUCTURE_MULTIPLIERS:
         raise HTTPException(
@@ -559,45 +626,36 @@ def calculate_vulnerability(
     )
     bcat_mod = 1.20 if non_resistant else 1.0
 
-    # ── Damage fraction (piecewise linear per Saffir-Simpson band) ──────────
+    # ── Piecewise damage fraction ────────────────────────────────────────────
     if storm_wind_mph < 40.0:
-        # Sub-tropical — cosmetic debris only, zero structural damage.
         damage_fraction = 0.0
     elif storm_wind_mph < 74.0:
-        # Tropical storm (40–73 mph): roof shingles / siding loss, 1–5 %.
         t = (storm_wind_mph - 40.0) / 34.0
         damage_fraction = 0.01 + 0.04 * t
     elif storm_wind_mph < 96.0:
-        # Hurricane Cat 1 (74–95 mph): moderate structural damage, 5–20 %.
         t = (storm_wind_mph - 74.0) / 22.0
         damage_fraction = 0.05 + 0.15 * t
     elif storm_wind_mph < 111.0:
-        # Hurricane Cat 2 (96–110 mph): extensive damage, 20–40 %.
         t = (storm_wind_mph - 96.0) / 15.0
         damage_fraction = 0.20 + 0.20 * t
     elif storm_wind_mph < 130.0:
-        # Hurricane Cat 3 (111–129 mph): devastating damage, 40–80 %.
         t = (storm_wind_mph - 111.0) / 19.0
         damage_fraction = 0.40 + 0.40 * t
     else:
-        # Hurricane Cat 4+ (≥ 130 mph): catastrophic / near-total loss.
         t = min(1.0, (storm_wind_mph - 130.0) / 30.0)
         damage_fraction = 0.80 + 0.20 * t
 
     adjusted_fraction = min(1.0, damage_fraction * multiplier * bcat_mod)
     predicted_damage_usd = round(base_value * adjusted_fraction, 2)
 
-    # ── Vulnerability score (0–100, wind-band anchored) ─────────────────────
+    # ── Vulnerability score ──────────────────────────────────────────────────
     if storm_wind_mph < 40.0:
-        # LOW band: hard ceiling at 19.
-        # BCAT modifier excluded — light wind does not load the structure.
         raw = (storm_wind_mph / 40.0) * 12.0
         if year_built < 2000:
             raw += 2.0
         vulnerability_score = int(round(min(19.0, max(0.0, raw))))
 
     elif storm_wind_mph < 74.0:
-        # MODERATE band: clamped 20–49.
         t = (storm_wind_mph - 40.0) / 34.0
         raw = 20.0 + 20.0 * t
         raw += (multiplier - 1.0) * 8.0   # +9.6 mobile home, −2.4 multi-family
@@ -608,7 +666,6 @@ def calculate_vulnerability(
         vulnerability_score = int(round(min(49.0, max(20.0, raw))))
 
     else:
-        # HIGH / EVACUATE band: clamped 50–100.
         t = min(1.0, (storm_wind_mph - 74.0) / 56.0)
         raw = 50.0 + 35.0 * t
         raw += (multiplier - 1.0) * 12.0  # +14.4 mobile home, −3.6 multi-family
@@ -630,15 +687,7 @@ def build_recommendation(
     bcat: Dict[str, str],
     shelters_found: int,
 ) -> str:
-    """
-    Map vulnerability_score to a risk label and plain-language action.
-
-    Score → band alignment:
-        0–19  → [LOW RISK]
-       20–49  → [MODERATE RISK]
-       50–74  → [HIGH RISK]
-       75–100 → [EVACUATE]
-    """
+    """Map vulnerability_score to a risk label and plain-language action."""
     if vulnerability_score >= 75:
         risk_level = "EVACUATE"
         action = (
@@ -656,11 +705,11 @@ def build_recommendation(
         risk_level = "MODERATE RISK"
         action = (
             "Elevated wind hazard. Shelter-in-place may be viable for fully "
-            "code-compliant structures; monitor NWS forecasts closely and "
-            "prepare to evacuate if conditions intensify."
+            "code-compliant structures; monitor NWS forecasts and prepare to "
+            "evacuate if conditions intensify."
         )
     else:
-        # LOW RISK — surface BCAT context as the primary actionable note.
+        # LOW RISK: surface BCAT context as the primary actionable note.
         return (
             f"[LOW RISK] Current wind conditions pose minimal structural threat; "
             "no evacuation action is required at this time. "
@@ -682,19 +731,25 @@ def build_recommendation(
     return f"[{risk_level}] {action}{code_note}{shelter_note}"
 
 
+# ---------------------------------------------------------------------------
+# Statewide Haversine shelter routing
+# ---------------------------------------------------------------------------
+
 def find_survivable_shelters(
     lat: float,
     lon: float,
     storm_wind_mph: float,
     all_shelters: List[Dict[str, Any]],
-    limit: int = 3,
+    limit: int = MAX_SHELTERS_RETURNED,
 ) -> List[ShelterResult]:
     """
-    Filter shelters whose structural wind rating meets or exceeds the storm
-    speed, rank by distance, and return the nearest `limit` results.
+    Filter shelters to those rated for >= storm_wind_mph, rank by Haversine
+    distance, and return the nearest `limit` results.
+
+    With a full statewide inventory, Haversine over every record is
+    sub-millisecond — no spatial index required.
     """
     results: List[ShelterResult] = []
-
     for s in all_shelters:
         if s["max_wind_rating_mph"] < storm_wind_mph:
             continue
@@ -730,60 +785,98 @@ def find_survivable_shelters(
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
-async def health() -> Dict[str, str]:
-    return {"status": "ok"}
+async def health() -> Dict[str, Any]:
+    return {
+        "status": "ok",
+        "bcat_source": BCAT_SOURCE,
+        "bcat_counties_loaded": len(STATEWIDE_BCAT),
+        "coverage": f"{len(STATEWIDE_BCAT)}/100 NC counties",
+    }
 
 
 @app.get("/api/shelters")
 async def get_shelters() -> List[Dict[str, Any]]:
     """Return the current shelter inventory (live NSS or fallback)."""
-    return await fetch_shelters()
+    shelters, _ = await fetch_shelters()
+    return shelters
+
+
+@app.get("/api/bcat/status")
+async def bcat_status() -> Dict[str, Any]:
+    """Report statewide BCAT ingestion coverage — useful for startup verification."""
+    return {
+        "source": BCAT_SOURCE,
+        "counties_loaded": len(STATEWIDE_BCAT),
+        "coverage": f"{len(STATEWIDE_BCAT)}/100 NC counties",
+        "fips_indexed": sorted(STATEWIDE_BCAT.keys()),
+    }
+
+
+@app.get("/api/bcat/{fips}")
+async def get_bcat_by_fips(fips: str) -> Dict[str, Any]:
+    """
+    Look up BCAT building code attributes for a given 5-digit county FIPS.
+    Validates statewide ingestion for any NC county.
+    """
+    fips = fips.strip().zfill(5)
+    if fips not in STATEWIDE_BCAT:
+        raise HTTPException(404, f"FIPS '{fips}' not found in statewide BCAT index.")
+    return {"fips": fips, **STATEWIDE_BCAT[fips], "source": BCAT_SOURCE}
 
 
 @app.post("/api/evaluate", response_model=EvaluateResponse)
 async def evaluate(payload: EvaluateRequest) -> EvaluateResponse:
     """
-    Full evaluation pipeline:
+    Full statewide evaluation pipeline.
 
-    Step 1  resolve_county + fetch_weather + fetch_shelters  — parallel
-    Step 2  fetch_bcat                                       — after county
-    Step 3  calculate_vulnerability
-    Step 4  find_survivable_shelters
-    Step 5  build_recommendation
+    Step 1 — Parallel I/O (3 concurrent calls):
+              resolve_county  ║  fetch_weather  ║  fetch_shelters
+    Step 2 — O(1) dict lookup: STATEWIDE_BCAT[fips]  (no extra network call)
+    Step 3 — calculate_vulnerability (HAZUS piecewise curve)
+    Step 4 — find_survivable_shelters (statewide Haversine, nearest 5)
+    Step 5 — build_recommendation + assemble DataSources lineage
     """
-    # ── Step 1: fire independent fetches concurrently ───────────────────────
-    # county and (weather + shelters) run in parallel; weather and shelters
-    # also run in parallel with each other inside the nested gather.
-    county, (weather, all_shelters) = await asyncio.gather(
+    # ── Step 1: parallel I/O ─────────────────────────────────────────────────
+    # resolve_county returns (dict, str); fetch_shelters returns (List, str).
+    # asyncio.gather preserves order and runs all three coroutines concurrently.
+    county_result, inner_results = await asyncio.gather(
         resolve_county(payload.lat, payload.lon),
         asyncio.gather(
             fetch_weather(payload.lat, payload.lon),
             fetch_shelters(),
         ),
     )
+    county, county_source = county_result
+    weather, shelter_data = inner_results
+    all_shelters, shelter_source = shelter_data
 
-    # ── Step 2: BCAT requires county FIPS — runs after step 1 ───────────────
-    bcat = await fetch_bcat(county["county_fips"], county["county_name_clean"])
+    # ── Step 2: BCAT from startup-ingested dict ──────────────────────────────
+    fips = county["county_fips"]
+    bcat = STATEWIDE_BCAT.get(fips)
+    if bcat is None:
+        # County FIPS absent from statewide index — use conservative defaults.
+        bcat = _DEFAULT_BCAT.copy()
+        bcat_lineage = "FEMA_BCAT_DEFAULT"
+    else:
+        bcat_lineage = BCAT_SOURCE
 
-    # ── Step 3: determine storm wind speed ──────────────────────────────────
-    # scenario_wind_mph overrides live forecast (useful for what-if analysis).
+    # ── Step 3: storm wind speed (scenario override or live gust) ───────────
     storm_wind_mph = (
         float(payload.scenario_wind_mph)
         if payload.scenario_wind_mph is not None
         else weather.wind_gusts_mph
     )
 
-    # ── Step 4: score vulnerability ─────────────────────────────────────────
+    # ── Step 4: HAZUS vulnerability scoring ─────────────────────────────────
     vuln = calculate_vulnerability(
         payload.year_built, payload.structure_type, bcat, storm_wind_mph
     )
 
-    # ── Step 5: filter and rank shelters ────────────────────────────────────
+    # ── Step 5: statewide Haversine shelter routing ──────────────────────────
     survivable = find_survivable_shelters(
         payload.lat, payload.lon, storm_wind_mph, all_shelters
     )
 
-    # ── Step 6: compose recommendation ─────────────────────────────────────
     recommendation = build_recommendation(
         vuln["vulnerability_score"],
         county["county_name"],
@@ -793,7 +886,7 @@ async def evaluate(payload: EvaluateRequest) -> EvaluateResponse:
 
     return EvaluateResponse(
         county_name=county["county_name"],
-        county_fips=county["county_fips"],
+        county_fips=fips,
         bcat_wind_resistance=bcat["bcat_wind_resistance"],
         bcat_flood_resistance=bcat["bcat_flood_resistance"],
         building_code_era=bcat["building_code_era"],
@@ -803,6 +896,11 @@ async def evaluate(payload: EvaluateRequest) -> EvaluateResponse:
         recommendation=recommendation,
         weather=weather,
         survivable_shelters=survivable,
+        data_sources=DataSources(
+            county_resolution=county_source,
+            bcat_rating=bcat_lineage,
+            shelter_source=shelter_source,
+        ),
     )
 
 

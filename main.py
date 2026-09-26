@@ -36,6 +36,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+def root():
+    return {
+        "service": "SafeHaven NC API",
+        "status": "online",
+        "docs": "/docs"
+    }
+
 
 # ---------------------------------------------------------------------------
 # Static reference data

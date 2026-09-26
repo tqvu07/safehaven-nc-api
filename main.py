@@ -5,7 +5,7 @@ Carolina Data Challenge
 Single-file FastAPI service providing:
   - Live wind-gust forecasting via Open-Meteo
   - FEMA BCAT-based county building code lookup (NC Triangle counties)
-  - Structural vulnerability / predicted-damage scoring
+  - Structural vulnerability / predicted-damage scoring (HAZUS-style piecewise curve)
   - Survivable-shelter filtering and routing (Haversine + Google Maps links)
 """
 
@@ -289,6 +289,18 @@ def calculate_vulnerability(
     county: Dict[str, Any],
     storm_wind_mph: float,
 ) -> Dict[str, Any]:
+    """
+    Returns vulnerability_score (0–100) and predicted_damage_usd using a
+    HAZUS-style piecewise wind-damage curve anchored to Saffir-Simpson thresholds.
+
+    Score bands are hard-bounded by wind speed so that calm/breezy conditions
+    can never bleed into MODERATE or higher risk tiers:
+
+        < 40 mph  →  LOW band       (score  0–19,  $0 structural damage)
+        40–73 mph →  MODERATE band  (score 20–49,  1–5 % of base value)
+        74–95 mph →  HIGH band      (score 50–74,  5–20 %)
+        96+ mph   →  EVACUATE band  (score 75–100, 20–100 %)
+    """
     if structure_type not in STRUCTURE_MULTIPLIERS:
         raise HTTPException(
             status_code=400,
@@ -299,29 +311,90 @@ def calculate_vulnerability(
         )
 
     multiplier = STRUCTURE_MULTIPLIERS[structure_type]
-
-    base_score = 30.0
-    if year_built < 2000:
-        base_score += 25.0
-
-    # Wind exposure contributes proportionally to how close the storm is
-    # to a "major hurricane" benchmark (130 mph).
-    wind_exposure_score = min(30.0, (storm_wind_mph / 130.0) * 30.0)
-    base_score += wind_exposure_score
-
-    score = base_score * multiplier
+    base_value = STRUCTURE_BASE_VALUE_USD.get(structure_type, 250_000)
 
     non_resistant = (
         county["bcat_wind_resistance"] == "Not Resistant"
         or county["bcat_flood_resistance"] == "Not Resistant"
     )
-    if non_resistant:
-        score *= 1.20  # additional damage modifier for non-resistant BCAT counties
+    bcat_damage_modifier = 1.20 if non_resistant else 1.0
 
-    vulnerability_score = int(round(min(100.0, max(0.0, score))))
+    # ------------------------------------------------------------------
+    # 1. HAZUS-style piecewise damage fraction
+    #    Thresholds follow Saffir-Simpson + tropical-storm onset (40 mph).
+    # ------------------------------------------------------------------
+    if storm_wind_mph < 40.0:
+        # Sub-tropical threshold: cosmetic debris only, zero structural damage.
+        damage_fraction = 0.0
 
-    base_value = STRUCTURE_BASE_VALUE_USD.get(structure_type, 250_000)
-    predicted_damage_usd = round(base_value * (vulnerability_score / 100.0), 2)
+    elif storm_wind_mph < 74.0:
+        # Tropical storm (40–73 mph): minor roof shingle / siding loss, 1–5 %.
+        t = (storm_wind_mph - 40.0) / (74.0 - 40.0)
+        damage_fraction = 0.01 + 0.04 * t
+
+    elif storm_wind_mph < 96.0:
+        # Hurricane Cat 1 (74–95 mph): moderate structural damage, 5–20 %.
+        t = (storm_wind_mph - 74.0) / (96.0 - 74.0)
+        damage_fraction = 0.05 + 0.15 * t
+
+    elif storm_wind_mph < 111.0:
+        # Hurricane Cat 2 (96–110 mph): extensive damage, 20–40 %.
+        t = (storm_wind_mph - 96.0) / (111.0 - 96.0)
+        damage_fraction = 0.20 + 0.20 * t
+
+    elif storm_wind_mph < 130.0:
+        # Hurricane Cat 3 (111–129 mph): devastating damage, 40–80 %.
+        t = (storm_wind_mph - 111.0) / (130.0 - 111.0)
+        damage_fraction = 0.40 + 0.40 * t
+
+    else:
+        # Hurricane Cat 4+ (≥ 130 mph): catastrophic / near-total loss, 80–100 %.
+        t = min(1.0, (storm_wind_mph - 130.0) / 30.0)
+        damage_fraction = 0.80 + 0.20 * t
+
+    # Apply per-structure-type and BCAT modifiers; cap at total loss (1.0).
+    adjusted_fraction = min(1.0, damage_fraction * multiplier * bcat_damage_modifier)
+    predicted_damage_usd = round(base_value * adjusted_fraction, 2)
+
+    # ------------------------------------------------------------------
+    # 2. Vulnerability score (0–100), wind-band anchored
+    #
+    #    Each band has a hard floor and ceiling so that a light breeze in
+    #    a "Not Resistant" county can never falsely trigger MODERATE/HIGH.
+    #    Within each band, structure type, building age, and BCAT rating
+    #    shift the score toward the band's upper limit.
+    # ------------------------------------------------------------------
+    if storm_wind_mph < 40.0:
+        # LOW band: ceiling hard-locked at 19.
+        raw = (storm_wind_mph / 40.0) * 12.0
+        if year_built < 2000:
+            raw += 2.0
+        # Note: BCAT modifier intentionally excluded here — it only matters
+        # when wind is strong enough to load the structure meaningfully.
+        vulnerability_score = int(round(min(19.0, max(0.0, raw))))
+
+    elif storm_wind_mph < 74.0:
+        # MODERATE band: 20–49.
+        t = (storm_wind_mph - 40.0) / (74.0 - 40.0)
+        raw = 20.0 + 20.0 * t
+        raw += (multiplier - 1.0) * 8.0   # +9.6 mobile home, -2.4 multi-family
+        if year_built < 2000:
+            raw += 4.0
+        if non_resistant:
+            raw += 3.0
+        vulnerability_score = int(round(min(49.0, max(20.0, raw))))
+
+    else:
+        # HIGH / EVACUATE band: 50–100.
+        # Normalize over a ~56 mph span (Cat 1 onset → mid-Cat 3).
+        t = min(1.0, (storm_wind_mph - 74.0) / 56.0)
+        raw = 50.0 + 35.0 * t
+        raw += (multiplier - 1.0) * 12.0  # +14.4 mobile home, -3.6 multi-family
+        if year_built < 2000:
+            raw += 6.0
+        if non_resistant:
+            raw += 5.0
+        vulnerability_score = int(round(min(100.0, max(50.0, raw))))
 
     return {
         "vulnerability_score": vulnerability_score,
@@ -332,26 +405,62 @@ def calculate_vulnerability(
 def build_recommendation(
     vulnerability_score: int, county: Dict[str, Any], shelters_found: int
 ) -> str:
-    if vulnerability_score >= 75:
-        risk_level = "CRITICAL"
-        action = "Evacuate immediately to a rated shelter before storm onset."
-    elif vulnerability_score >= 50:
-        risk_level = "HIGH"
-        action = "Strongly consider relocating to a rated shelter as conditions develop."
-    elif vulnerability_score >= 25:
-        risk_level = "MODERATE"
-        action = "Shelter-in-place may be viable if the structure meets code; monitor updates."
-    else:
-        risk_level = "LOW"
-        action = "Structure is likely resilient for this event; monitor local alerts."
+    """
+    Maps vulnerability_score to a risk label and plain-language action.
 
+    Score bands align with the wind-anchored bands in calculate_vulnerability:
+        0–19  → [LOW RISK]
+       20–49  → [MODERATE RISK]
+       50–74  → [HIGH RISK]
+       75–100 → [EVACUATE]
+    """
+    if vulnerability_score >= 75:
+        risk_level = "EVACUATE"
+        action = (
+            "Evacuate immediately to a rated emergency shelter before storm onset. "
+            "This structure type is at severe risk of catastrophic failure under "
+            "current forecast wind speeds."
+        )
+    elif vulnerability_score >= 50:
+        risk_level = "HIGH RISK"
+        action = (
+            "Significant structural threat detected. Strongly consider relocating "
+            "to a rated shelter now as conditions develop."
+        )
+    elif vulnerability_score >= 20:
+        risk_level = "MODERATE RISK"
+        action = (
+            "Elevated wind hazard. Shelter-in-place may be viable for fully "
+            "code-compliant structures; monitor official NWS forecasts closely "
+            "and prepare to evacuate if conditions intensify."
+        )
+    else:
+        # LOW RISK — surface the BCAT note here since it is the most
+        # actionable information when no immediate threat exists.
+        risk_level = "LOW RISK"
+        action = (
+            "Current wind conditions pose minimal structural threat; "
+            "no evacuation action is required at this time. "
+            f"However, note that {county['county_name']} carries a "
+            f"'{county['bcat_wind_resistance']}' FEMA BCAT wind-resistance "
+            f"rating under the {county['building_code_era']} standard — "
+            "verify that your structure meets current code requirements "
+            "before any future severe weather season."
+        )
+        return f"[{risk_level}] {action}"
+
+    # Append code and shelter context for MODERATE / HIGH / EVACUATE tiers.
     code_note = (
-        f" {county['county_name']} building codes are rated '{county['bcat_wind_resistance']}' "
-        f"for wind, under the {county['building_code_era']} standard."
+        f" {county['county_name']} building codes are rated "
+        f"'{county['bcat_wind_resistance']}' for wind under the "
+        f"{county['building_code_era']} standard."
     )
 
     if shelters_found == 0:
-        shelter_note = " WARNING: No known shelters in the database can survive this storm's peak winds."
+        shelter_note = (
+            " WARNING: No known shelters in the database can survive "
+            "this storm's peak winds."
+        )
     else:
         shelter_note = f" {shelters_found} survivable shelter(s) identified nearby."
 

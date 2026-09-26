@@ -1,0 +1,93 @@
+[
+  {
+    "name": "East Chapel Hill High School",
+    "county": "Orange",
+    "lat": 35.9542,
+    "lon": -79.0354,
+    "max_wind_rating_mph": 120,
+    "evacuation_capacity": 450,
+    "total_population": 0,
+    "shelter_status": "DESIGNATED",
+    "pet_friendly": true,
+    "ada_accessible": true,
+    "generator": true
+  },
+  {
+    "name": "Smith Middle School",
+    "county": "Orange",
+    "lat": 35.9427,
+    "lon": -79.0805,
+    "max_wind_rating_mph": 110,
+    "evacuation_capacity": 350,
+    "total_population": 0,
+    "shelter_status": "DESIGNATED",
+    "pet_friendly": false,
+    "ada_accessible": true,
+    "generator": true
+  },
+  {
+    "name": "Durham County Memorial Stadium",
+    "county": "Durham",
+    "lat": 36.0345,
+    "lon": -78.8920,
+    "max_wind_rating_mph": 130,
+    "evacuation_capacity": 800,
+    "total_population": 0,
+    "shelter_status": "DESIGNATED",
+    "pet_friendly": true,
+    "ada_accessible": true,
+    "generator": true
+  },
+  {
+    "name": "Southern Durham High School",
+    "county": "Durham",
+    "lat": 35.9320,
+    "lon": -78.8576,
+    "max_wind_rating_mph": 115,
+    "evacuation_capacity": 500,
+    "total_population": 0,
+    "shelter_status": "DESIGNATED",
+    "pet_friendly": false,
+    "ada_accessible": true,
+    "generator": true
+  },
+  {
+    "name": "PNC Arena / Carter-Finley Complex",
+    "county": "Wake",
+    "lat": 35.8033,
+    "lon": -78.7218,
+    "max_wind_rating_mph": 150,
+    "evacuation_capacity": 1500,
+    "total_population": 0,
+    "shelter_status": "DESIGNATED",
+    "pet_friendly": true,
+    "ada_accessible": true,
+    "generator": true
+  },
+  {
+    "name": "Southeast Raleigh Magnet High",
+    "county": "Wake",
+    "lat": 35.7533,
+    "lon": -78.6012,
+    "max_wind_rating_mph": 120,
+    "evacuation_capacity": 600,
+    "total_population": 0,
+    "shelter_status": "DESIGNATED",
+    "pet_friendly": true,
+    "ada_accessible": true,
+    "generator": true
+  },
+  {
+    "name": "Cary High School",
+    "county": "Wake",
+    "lat": 35.7766,
+    "lon": -78.7709,
+    "max_wind_rating_mph": 115,
+    "evacuation_capacity": 550,
+    "total_population": 0,
+    "shelter_status": "DESIGNATED",
+    "pet_friendly": false,
+    "ada_accessible": true,
+    "generator": true
+  }
+]

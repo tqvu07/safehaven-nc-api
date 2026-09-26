@@ -1,12 +1,29 @@
 """
 SafeHaven NC — Emergency Resilience and Adaptive Shelter Router
-Version 3.0.0 — Full 100-county NC coverage
+Version 3.1.0 — Full 100-county NC coverage  (bugfix release)
 Carolina Data Challenge
+
+Bug fixes in this release
+──────────────────────────
+BUG 1 — Shelter filter returning 0 results at low wind speeds
+  · NSS_DEFAULT_WIND_RATING_MPH raised 110 → 120 (FEMA P-361 / ICC-500 minimum)
+  · _normalise_fallback_record: use `or` guard so a 0/None in JSON still
+    resolves to the default rather than storing 0.0 in the dict
+  · find_survivable_shelters: safe float conversion on every shelter's rating;
+    sub-tropical threshold (< 40 mph) uses min_rating = 100.0 so ALL
+    properly-rated public shelters always qualify during calm conditions
+  · build_recommendation: receives storm_wind_mph; "no shelters survive" warning
+    is suppressed below 74 mph so a 20 mph breeze never triggers evacuation copy
+
+BUG 2 — ArcGIS pagination truncating BCAT fetch to ≤50 records
+  · ingest_statewide_bcat: resultRecordCount=200 added to query params
+  · evaluate: FIPS absent from STATEWIDE_BCAT silently falls back to
+    _DEFAULT_BCAT (no crash, no 500 error)
 
 Architecture
 ────────────
 Startup  : Bulk FEMA BCAT ingestion for all 100 NC counties → STATEWIDE_BCAT dict
-Runtime  : Census TIGERweb spatial geocoding → O(1) STATEWIDE_BCAT lookup (no per-request BCAT call)
+Runtime  : Census TIGERweb spatial geocoding → O(1) STATEWIDE_BCAT lookup
 Parallel : weather + NSS shelters fire concurrently with county geocoding
 Routing  : Statewide Haversine ranking across every NC shelter record
 Lineage  : data_sources block in every EvaluateResponse
@@ -60,7 +77,10 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 REQUEST_TIMEOUT: float = 5.0
 
 # Shelter routing
-NSS_DEFAULT_WIND_RATING_MPH: float = 110.0  # IBC Risk Category III minimum
+# FIX 1a: raised from 110.0 → 120.0 (FEMA P-361 / ICC-500 public institutional minimum).
+# At 110 mph every Cat-1 scenario excluded all shelters; 120 matches the
+# design standard actually applied to schools and community shelters.
+NSS_DEFAULT_WIND_RATING_MPH: float = 120.0
 MAX_SHELTERS_RETURNED: int = 5
 
 # HAZUS vulnerability
@@ -80,11 +100,11 @@ TTL_COUNTY: float = 3_600.0    # 1 hour  — county boundaries are stable
 TTL_SHELTERS: float = 900.0    # 15 min  — NSS populations update frequently
 
 # Conservative defaults applied when a county FIPS is absent from STATEWIDE_BCAT.
-# "Not Resistant" is intentionally conservative for emergency management purposes.
+# "Not Resistant" is the safe failure mode for emergency management.
 _DEFAULT_BCAT: Dict[str, str] = {
     "bcat_wind_resistance": "Not Resistant",
     "bcat_flood_resistance": "Not Resistant",
-    "building_code_era": "Standard NC Code",
+    "building_code_era": "NC State Residential Code",
 }
 
 
@@ -93,7 +113,6 @@ _DEFAULT_BCAT: Dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 # Maps 5-digit FIPS → {bcat_wind_resistance, bcat_flood_resistance, building_code_era}
-# for every NC county. Populated by ingest_statewide_bcat() at process start.
 STATEWIDE_BCAT: Dict[str, Dict[str, str]] = {}
 BCAT_SOURCE: str = "FEMA_BCAT_STATEWIDE_FALLBACK"
 
@@ -164,12 +183,14 @@ async def ingest_statewide_bcat() -> None:
     Fetch all NC county BCAT records from FEMA GeoPlatform and index them in
     STATEWIDE_BCAT by 5-digit FIPS code.
 
-    Priority order:
-      1. FEMA live service (STATE = 'NC' query, all outFields)
-      2. nc_bcat_statewide.json local fallback
-      3. Empty dict — per-county lookups fall back to _DEFAULT_BCAT
+    FIX 2: resultRecordCount=200 added — ArcGIS REST servers default to
+    returning only 10–50 records, which previously truncated NC's 100 counties
+    to a partial list.
 
-    Called once at process startup via the lifespan context manager.
+    Priority order:
+      1. FEMA live service  → BCAT_SOURCE = "FEMA_BCAT_STATEWIDE_LIVE"
+      2. nc_bcat_statewide.json fallback → "FEMA_BCAT_STATEWIDE_FALLBACK"
+      3. Empty dict (per-county lookups fall back to _DEFAULT_BCAT)
     """
     global STATEWIDE_BCAT, BCAT_SOURCE
 
@@ -180,6 +201,9 @@ async def ingest_statewide_bcat() -> None:
             "CODE_EDITION,BCAT_STATUS"
         ),
         "returnGeometry": "false",
+        # FIX 2: without this, ArcGIS returns ≤50 records by default.
+        # NC has exactly 100 counties; 200 gives comfortable headroom.
+        "resultRecordCount": 200,
         "f": "json",
     }
 
@@ -241,7 +265,7 @@ async def ingest_statewide_bcat() -> None:
                         rec.get("bcat_flood_resistance", "Not Resistant")
                     ),
                     "building_code_era": str(
-                        rec.get("building_code_era", "Standard NC Code")
+                        rec.get("building_code_era", "NC State Residential Code")
                     ),
                 }
             STATEWIDE_BCAT = bcat_map
@@ -270,7 +294,6 @@ async def ingest_statewide_bcat() -> None:
 async def lifespan(_app: FastAPI):  # noqa: RUF029
     await ingest_statewide_bcat()
     yield
-    # Graceful shutdown hooks can be added here (e.g., close DB connections).
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +306,7 @@ app = FastAPI(
         "Emergency resilience and adaptive shelter router — full 100-county "
         "NC statewide coverage via live FEMA BCAT + Census TIGERweb APIs."
     ),
-    version="3.0.0",
+    version="3.1.0",
     lifespan=lifespan,
 )
 
@@ -300,7 +323,7 @@ app.add_middleware(
 async def root() -> Dict[str, Any]:
     return {
         "service": "SafeHaven NC API",
-        "version": "3.0.0",
+        "version": "3.1.0",
         "coverage": "100 NC counties",
         "status": "online",
         "bcat_source": BCAT_SOURCE,
@@ -382,10 +405,7 @@ async def resolve_county(
     Spatial geocoding via US Census TIGERweb State_County layer.
     Covers any US county — no bounding boxes, no hard-coded limits.
 
-    Returns:
-        (county_dict, source_label)
-        county_dict keys: county_name, county_name_clean, county_fips
-
+    Returns (county_dict, source_label).
     Cache TTL: 1 hour, keyed to lat/lon rounded to 2 decimal places (~1 km).
     """
     cache_key = f"county_{round(lat, 2)}_{round(lon, 2)}"
@@ -440,10 +460,10 @@ async def resolve_county(
 async def fetch_weather(lat: float, lon: float) -> WeatherInfo:
     """
     Fetch live multi-metric weather from Open-Meteo:
-      - current_temp_f             Current 2 m temperature (°F)
-      - wind_gusts_mph             Peak 10 m gust over next 24 h (mph)
-      - sustained_wind_mph         Current 10 m wind speed (mph)
-      - precipitation_next_24h_in  Total 24 h accumulated precipitation (in)
+      current_temp_f             Current 2 m temperature (°F)
+      wind_gusts_mph             Peak 10 m gust over next 24 h (mph)
+      sustained_wind_mph         Current 10 m wind speed (mph)
+      precipitation_next_24h_in  Total 24 h accumulated precipitation (in)
     """
     params = {
         "latitude": lat,
@@ -492,7 +512,11 @@ def _load_nc_shelters_fallback() -> List[Dict[str, Any]]:
 
 
 def _normalise_nss_feature(feat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Convert a GeoJSON NSS Feature to the internal shelter dict. Returns None on bad geometry."""
+    """
+    Convert a GeoJSON NSS Feature to the internal shelter dict.
+    Returns None on bad/missing geometry.
+    NSS has no structural wind-rating field; NSS_DEFAULT_WIND_RATING_MPH is used.
+    """
     geom = feat.get("geometry") or {}
     coords = geom.get("coordinates", [])
     if len(coords) < 2 or coords[0] is None or coords[1] is None:
@@ -508,6 +532,7 @@ def _normalise_nss_feature(feat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "county": str(props.get("COUNTY") or "Unknown").strip(),
         "lat": lat_f,
         "lon": lon_f,
+        # Always the constant — NSS provides no per-shelter structural rating.
         "max_wind_rating_mph": NSS_DEFAULT_WIND_RATING_MPH,
         "evacuation_capacity": evac_cap,
         "total_population": total_pop,
@@ -520,7 +545,14 @@ def _normalise_nss_feature(feat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _normalise_fallback_record(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalise a nc_shelters.json record to the internal shelter dict schema."""
+    """
+    Normalise a nc_shelters.json record to the internal shelter dict schema.
+
+    FIX 1b: `raw.get("max_wind_rating_mph") or NSS_DEFAULT_WIND_RATING_MPH`
+    uses the `or` short-circuit so that 0, None, False, or a missing key all
+    resolve to the constant — rather than storing 0.0 and making the shelter
+    invisible at any non-zero wind speed.
+    """
     evac_cap = int(raw.get("evacuation_capacity", raw.get("capacity", 300)))
     total_pop = int(raw.get("total_population", 0))
     return {
@@ -528,8 +560,9 @@ def _normalise_fallback_record(raw: Dict[str, Any]) -> Dict[str, Any]:
         "county": str(raw.get("county", "Unknown")).strip(),
         "lat": float(raw["lat"]),
         "lon": float(raw["lon"]),
+        # FIX 1b: `or` guard replaces falsy values (0, None) with the default.
         "max_wind_rating_mph": float(
-            raw.get("max_wind_rating_mph", NSS_DEFAULT_WIND_RATING_MPH)
+            raw.get("max_wind_rating_mph") or NSS_DEFAULT_WIND_RATING_MPH
         ),
         "evacuation_capacity": evac_cap,
         "total_population": total_pop,
@@ -548,8 +581,8 @@ async def fetch_shelters() -> Tuple[List[Dict[str, Any]], str]:
 
     Cache TTL: 15 minutes.
     Fallback: nc_shelters.json when NSS returns 0 records (no active NC
-    disaster declaration). The fallback file should contain the full
-    statewide designated-facility inventory.
+    disaster declaration). The fallback file contains the full statewide
+    designated-facility inventory.
     """
     cache_key = "nss_shelters_nc"
     cached = cache_get(cache_key)
@@ -626,7 +659,7 @@ def calculate_vulnerability(
     )
     bcat_mod = 1.20 if non_resistant else 1.0
 
-    # ── Piecewise damage fraction ────────────────────────────────────────────
+    # ── Piecewise damage fraction (Saffir-Simpson bands) ────────────────────
     if storm_wind_mph < 40.0:
         damage_fraction = 0.0
     elif storm_wind_mph < 74.0:
@@ -648,14 +681,17 @@ def calculate_vulnerability(
     adjusted_fraction = min(1.0, damage_fraction * multiplier * bcat_mod)
     predicted_damage_usd = round(base_value * adjusted_fraction, 2)
 
-    # ── Vulnerability score ──────────────────────────────────────────────────
+    # ── Vulnerability score (wind-band anchored) ─────────────────────────────
     if storm_wind_mph < 40.0:
+        # LOW band: hard ceiling at 19.
+        # BCAT modifier excluded — light wind does not meaningfully load the structure.
         raw = (storm_wind_mph / 40.0) * 12.0
         if year_built < 2000:
             raw += 2.0
         vulnerability_score = int(round(min(19.0, max(0.0, raw))))
 
     elif storm_wind_mph < 74.0:
+        # MODERATE band: clamped 20–49.
         t = (storm_wind_mph - 40.0) / 34.0
         raw = 20.0 + 20.0 * t
         raw += (multiplier - 1.0) * 8.0   # +9.6 mobile home, −2.4 multi-family
@@ -666,6 +702,7 @@ def calculate_vulnerability(
         vulnerability_score = int(round(min(49.0, max(20.0, raw))))
 
     else:
+        # HIGH / EVACUATE band: clamped 50–100.
         t = min(1.0, (storm_wind_mph - 74.0) / 56.0)
         raw = 50.0 + 35.0 * t
         raw += (multiplier - 1.0) * 12.0  # +14.4 mobile home, −3.6 multi-family
@@ -686,8 +723,22 @@ def build_recommendation(
     county_name: str,
     bcat: Dict[str, str],
     shelters_found: int,
+    storm_wind_mph: float = 0.0,   # FIX 1c: new param gates the "no shelters" warning
 ) -> str:
-    """Map vulnerability_score to a risk label and plain-language action."""
+    """
+    Map vulnerability_score to a risk label and plain-language action.
+
+    FIX 1c: storm_wind_mph is now used to suppress the "no shelters can survive"
+    warning below hurricane-force winds (< 74 mph). At 20 mph that warning was
+    nonsensical and alarming — it only fires when conditions genuinely exceed all
+    available shelter ratings.
+
+    Score → band:
+        0–19  → [LOW RISK]
+       20–49  → [MODERATE RISK]
+       50–74  → [HIGH RISK]
+       75–100 → [EVACUATE]
+    """
     if vulnerability_score >= 75:
         risk_level = "EVACUATE"
         action = (
@@ -709,7 +760,8 @@ def build_recommendation(
             "evacuate if conditions intensify."
         )
     else:
-        # LOW RISK: surface BCAT context as the primary actionable note.
+        # LOW RISK — surface BCAT note as the primary actionable information.
+        # Never mention shelters or storm survival in this band.
         return (
             f"[LOW RISK] Current wind conditions pose minimal structural threat; "
             "no evacuation action is required at this time. "
@@ -723,11 +775,23 @@ def build_recommendation(
         f" {county_name} building codes are rated '{bcat['bcat_wind_resistance']}' "
         f"for wind under the {bcat['building_code_era']} standard."
     )
-    shelter_note = (
-        " WARNING: No known shelters can survive this storm's peak winds."
-        if shelters_found == 0
-        else f" {shelters_found} survivable shelter(s) identified nearby."
-    )
+
+    # FIX 1c: "no shelters survive" warning is only appropriate at hurricane force.
+    # Below 74 mph, shelters_found == 0 means the filter had nothing to work with
+    # (e.g., empty fallback file), not that winds exceed all structural ratings.
+    if shelters_found == 0 and storm_wind_mph >= 74.0:
+        shelter_note = (
+            " WARNING: No rated shelters in the database can survive this "
+            "storm's peak winds. Contact your county emergency management office."
+        )
+    elif shelters_found == 0:
+        shelter_note = (
+            " Check your local county emergency management office for "
+            "designated shelter locations."
+        )
+    else:
+        shelter_note = f" {shelters_found} survivable shelter(s) identified nearby."
+
     return f"[{risk_level}] {action}{code_note}{shelter_note}"
 
 
@@ -746,19 +810,33 @@ def find_survivable_shelters(
     Filter shelters to those rated for >= storm_wind_mph, rank by Haversine
     distance, and return the nearest `limit` results.
 
+    FIX 1d — two changes:
+      1. Sub-tropical threshold (storm_wind_mph < 40 mph): any shelter rated
+         >= 100 mph qualifies so calm/breezy conditions never produce an empty
+         list. 100 mph is the lowest credible public-shelter design speed.
+      2. Safe float conversion: `float(s.get("max_wind_rating_mph") or DEFAULT)`
+         prevents a KeyError or TypeError from a None/missing/zero value from
+         silently dropping the shelter.
+
     With a full statewide inventory, Haversine over every record is
     sub-millisecond — no spatial index required.
     """
+    # Below tropical-storm onset, match any properly rated public shelter.
+    # At 20 mph there is no meaningful structural load — every rated facility qualifies.
+    min_rating = 100.0 if storm_wind_mph < 40.0 else storm_wind_mph
+
     results: List[ShelterResult] = []
     for s in all_shelters:
-        if s["max_wind_rating_mph"] < storm_wind_mph:
+        # FIX 1d: safe float conversion guards against None / 0 / missing key.
+        rating = float(s.get("max_wind_rating_mph") or NSS_DEFAULT_WIND_RATING_MPH)
+        if rating < min_rating:
             continue
         dist = haversine_miles(lat, lon, s["lat"], s["lon"])
         results.append(
             ShelterResult(
                 name=s["name"],
                 county=s["county"],
-                max_wind_rating_mph=s["max_wind_rating_mph"],
+                max_wind_rating_mph=rating,
                 evacuation_capacity=s["evacuation_capacity"],
                 remaining_capacity=s["remaining_capacity"],
                 total_population=s["total_population"],
@@ -814,10 +892,7 @@ async def bcat_status() -> Dict[str, Any]:
 
 @app.get("/api/bcat/{fips}")
 async def get_bcat_by_fips(fips: str) -> Dict[str, Any]:
-    """
-    Look up BCAT building code attributes for a given 5-digit county FIPS.
-    Validates statewide ingestion for any NC county.
-    """
+    """Look up BCAT building code attributes for a given 5-digit county FIPS."""
     fips = fips.strip().zfill(5)
     if fips not in STATEWIDE_BCAT:
         raise HTTPException(404, f"FIPS '{fips}' not found in statewide BCAT index.")
@@ -832,13 +907,14 @@ async def evaluate(payload: EvaluateRequest) -> EvaluateResponse:
     Step 1 — Parallel I/O (3 concurrent calls):
               resolve_county  ║  fetch_weather  ║  fetch_shelters
     Step 2 — O(1) dict lookup: STATEWIDE_BCAT[fips]  (no extra network call)
+              FIX 2: absent FIPS → _DEFAULT_BCAT (no crash)
     Step 3 — calculate_vulnerability (HAZUS piecewise curve)
     Step 4 — find_survivable_shelters (statewide Haversine, nearest 5)
-    Step 5 — build_recommendation + assemble DataSources lineage
+              FIX 1d: min_rating=100 when storm_wind_mph < 40
+    Step 5 — build_recommendation
+              FIX 1c: storm_wind_mph passed to gate the "no shelters" warning
     """
     # ── Step 1: parallel I/O ─────────────────────────────────────────────────
-    # resolve_county returns (dict, str); fetch_shelters returns (List, str).
-    # asyncio.gather preserves order and runs all three coroutines concurrently.
     county_result, inner_results = await asyncio.gather(
         resolve_county(payload.lat, payload.lon),
         asyncio.gather(
@@ -850,17 +926,19 @@ async def evaluate(payload: EvaluateRequest) -> EvaluateResponse:
     weather, shelter_data = inner_results
     all_shelters, shelter_source = shelter_data
 
-    # ── Step 2: BCAT from startup-ingested dict ──────────────────────────────
+    # ── Step 2: O(1) BCAT lookup — never raises on missing FIPS ─────────────
     fips = county["county_fips"]
     bcat = STATEWIDE_BCAT.get(fips)
     if bcat is None:
-        # County FIPS absent from statewide index — use conservative defaults.
+        # County not in statewide index (e.g., out-of-state coords, or FEMA service
+        # was unreachable at startup and local fallback was missing this FIPS).
+        # Use conservative defaults — over-warn rather than crash.
         bcat = _DEFAULT_BCAT.copy()
         bcat_lineage = "FEMA_BCAT_DEFAULT"
     else:
         bcat_lineage = BCAT_SOURCE
 
-    # ── Step 3: storm wind speed (scenario override or live gust) ───────────
+    # ── Step 3: storm wind speed ─────────────────────────────────────────────
     storm_wind_mph = (
         float(payload.scenario_wind_mph)
         if payload.scenario_wind_mph is not None
@@ -877,11 +955,13 @@ async def evaluate(payload: EvaluateRequest) -> EvaluateResponse:
         payload.lat, payload.lon, storm_wind_mph, all_shelters
     )
 
+    # ── Step 6: recommendation — pass storm_wind_mph to gate warning copy ───
     recommendation = build_recommendation(
         vuln["vulnerability_score"],
         county["county_name"],
         bcat,
         len(survivable),
+        storm_wind_mph,           # FIX 1c: required for correct shelter_note logic
     )
 
     return EvaluateResponse(

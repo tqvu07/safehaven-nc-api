@@ -1,6 +1,6 @@
 """
 SafeHaven NC — Emergency Resilience and Adaptive Shelter Router
-Version 3.4.0 — 100-County Dynamic Ingestion & Multi-Tier Fallback
+Version 3.4.1 — Production Build with Flexible Shelter Schema Parsing
 Carolina Data Challenge
 """
 
@@ -58,7 +58,7 @@ TTL_COUNTY: float = 3_600.0
 TTL_SHELTERS: float = 900.0
 
 # ---------------------------------------------------------------------------
-# Guaranteed Statewide Baseline Datasets
+# 100 NC Counties Baseline (Guarantees zero missing counties)
 # ---------------------------------------------------------------------------
 
 ALL_100_NC_COUNTIES: Dict[str, str] = {
@@ -89,7 +89,7 @@ ALL_100_NC_COUNTIES: Dict[str, str] = {
     "37193": "Wilkes", "37195": "Wilson", "37197": "Yadkin", "37199": "Yancey",
 }
 
-# Verified Emergency Facilities (Safety net ensuring shelters never evaluate to empty)
+# In-memory safety net (only engaged if both live API and nc_shelters.json fail)
 EMERGENCY_FACILITY_BACKUP: List[Dict[str, Any]] = [
     {"name": "East Chapel Hill High School", "county": "Orange", "lat": 35.9542, "lon": -79.0354, "max_wind_rating_mph": 120.0, "evacuation_capacity": 450, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
     {"name": "Smith Middle School", "county": "Orange", "lat": 35.9427, "lon": -79.0805, "max_wind_rating_mph": 120.0, "evacuation_capacity": 350, "total_population": 0, "pet_friendly": False, "ada_accessible": True, "generator": True},
@@ -107,7 +107,7 @@ STATEWIDE_BCAT: Dict[str, Dict[str, str]] = {}
 BCAT_SOURCE: str = "FEMA_BCAT_STATEWIDE_FALLBACK"
 
 # ---------------------------------------------------------------------------
-# In-Memory Cache
+# In-Memory TTL Cache
 # ---------------------------------------------------------------------------
 
 class _CacheEntry:
@@ -233,7 +233,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="SafeHaven NC",
     description="Emergency resilience and adaptive shelter router — 100 NC counties.",
-    version="3.4.0",
+    version="3.4.1",
     lifespan=lifespan,
 )
 
@@ -294,7 +294,7 @@ class EvaluateResponse(BaseModel):
     data_sources: DataSources
 
 # ---------------------------------------------------------------------------
-# Resolvers & Normalizers
+# Dynamic Spatial & Shelter Resolvers
 # ---------------------------------------------------------------------------
 
 async def resolve_county(lat: float, lon: float) -> Tuple[Dict[str, str], str]:
@@ -368,25 +368,37 @@ def _normalize_raw_shelter(item: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(item, dict):
         return None
 
-    props = item.get("properties") if isinstance(item.get("properties"), dict) else item
+    # Handle GeoJSON 'properties', ArcGIS 'attributes', or direct dict
+    props = item.get("properties") or item.get("attributes") or item
+    if not isinstance(props, dict):
+        props = item
+
     geom = item.get("geometry") if isinstance(item.get("geometry"), dict) else {}
     coords = geom.get("coordinates") if isinstance(geom.get("coordinates"), list) else []
 
     lat: Optional[float] = None
     lon: Optional[float] = None
 
+    # GeoJSON: [lon, lat]
     if len(coords) >= 2:
         lon = _extract_coord(coords[0])
         lat = _extract_coord(coords[1])
 
+    # ArcGIS geometry: {"x": lon, "y": lat}
     if lat is None or lon is None:
-        for k in ("lat", "LAT", "latitude", "Latitude", "y", "Y"):
-            if k in props:
+        if "y" in geom and "x" in geom:
+            lat = _extract_coord(geom["y"])
+            lon = _extract_coord(geom["x"])
+
+    # Flat properties/attributes
+    if lat is None or lon is None:
+        for k in ("lat", "LAT", "latitude", "Latitude", "LATITUDE", "y", "Y"):
+            if k in props and props[k] is not None:
                 lat = _extract_coord(props[k])
                 if lat is not None:
                     break
-        for k in ("lon", "LON", "longitude", "Longitude", "long", "Long", "x", "X"):
-            if k in props:
+        for k in ("lon", "LON", "longitude", "Longitude", "LONGITUDE", "long", "Long", "x", "X"):
+            if k in props and props[k] is not None:
                 lon = _extract_coord(props[k])
                 if lon is not None:
                     break
@@ -394,17 +406,38 @@ def _normalize_raw_shelter(item: Any) -> Optional[Dict[str, Any]]:
     if lat is None or lon is None:
         return None
 
-    name = props.get("name") or props.get("SHELTER_NAME") or props.get("FACILITY_NAME") or "Emergency Shelter"
-    county = props.get("county") or props.get("COUNTY") or props.get("COUNTY_NAME") or "NC"
+    name = (
+        props.get("name")
+        or props.get("SHELTER_NAME")
+        or props.get("FACILITY_NAME")
+        or props.get("FACILITY_N")
+        or props.get("NAME")
+        or "Emergency Shelter"
+    )
 
-    raw_rating = props.get("max_wind_rating_mph") or props.get("WIND_RATING_MPH")
+    county = (
+        props.get("county")
+        or props.get("COUNTY")
+        or props.get("COUNTY_NAME")
+        or props.get("COUNTY_NAM")
+        or props.get("JURISDICTION")
+        or "NC"
+    )
+
+    raw_rating = props.get("max_wind_rating_mph") or props.get("WIND_RATING_MPH") or props.get("WIND_RATING")
     try:
         rating = float(raw_rating) if raw_rating and float(raw_rating) > 0 else NSS_DEFAULT_WIND_RATING_MPH
     except (ValueError, TypeError):
         rating = NSS_DEFAULT_WIND_RATING_MPH
 
-    cap = int(props.get("evacuation_capacity") or props.get("EVACUATION_CAPACITY") or props.get("capacity") or 400)
-    pop = int(props.get("total_population") or props.get("TOTAL_POPULATION") or 0)
+    cap = int(
+        props.get("evacuation_capacity")
+        or props.get("EVACUATION_CAPACITY")
+        or props.get("CAPACITY")
+        or props.get("capacity")
+        or 400
+    )
+    pop = int(props.get("total_population") or props.get("TOTAL_POPULATION") or props.get("POPULATION") or 0)
     status = str(props.get("shelter_status") or props.get("SHELTER_STATUS") or "DESIGNATED").upper()
 
     return {
@@ -417,9 +450,9 @@ def _normalize_raw_shelter(item: Any) -> Optional[Dict[str, Any]]:
         "total_population": pop,
         "remaining_capacity": max(0, cap - pop),
         "shelter_status": status,
-        "pet_friendly": bool(props.get("pet_friendly", False)),
-        "ada_accessible": bool(props.get("ada_accessible", True)),
-        "generator": bool(props.get("generator", True)),
+        "pet_friendly": bool(props.get("pet_friendly", False) or _parse_bool(props.get("PET_FRIENDLY"))),
+        "ada_accessible": bool(props.get("ada_accessible", True) or _parse_bool(props.get("ADA_COMPLIANT"))),
+        "generator": bool(props.get("generator", True) or _parse_bool(props.get("GENERATOR_ON_SITE"))),
     }
 
 async def fetch_shelters() -> Tuple[List[Dict[str, Any]], str]:
@@ -436,7 +469,7 @@ async def fetch_shelters() -> Tuple[List[Dict[str, Any]], str]:
         "f": "geojson",
     }
 
-    # Level 1: Live FEMA NSS ArcGIS Layer
+    # Step 1: Query live FEMA NSS service
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         try:
             resp = await client.get(NSS_SHELTERS_URL, params=params)
@@ -449,22 +482,27 @@ async def fetch_shelters() -> Tuple[List[Dict[str, Any]], str]:
         except Exception:
             pass
 
-    # Level 2: Local nc_shelters.json
+    # Step 2: Primary local dataset fallback (nc_shelters.json)
     if not shelters and NC_SHELTERS_FALLBACK_PATH.exists():
         source = "LOCAL_STATEWIDE_INVENTORY"
         try:
             raw_text = NC_SHELTERS_FALLBACK_PATH.read_text(encoding="utf-8")
             raw_data = json.loads(raw_text)
-            items = raw_data.get("features", raw_data) if isinstance(raw_data, dict) else raw_data
-            if isinstance(items, list):
-                for item in items:
-                    norm = _normalize_raw_shelter(item)
-                    if norm:
-                        shelters.append(norm)
-        except Exception:
-            pass
 
-    # Level 3: Guaranteed Internal Emergency Backup
+            items = []
+            if isinstance(raw_data, dict):
+                items = raw_data.get("features", []) or raw_data.get("records", []) or [raw_data]
+            elif isinstance(raw_data, list):
+                items = raw_data
+
+            for item in items:
+                norm = _normalize_raw_shelter(item)
+                if norm:
+                    shelters.append(norm)
+        except Exception as exc:
+            print(f"[SafeHaven] Error parsing nc_shelters.json: {exc}")
+
+    # Step 3: Emergency code backup (only if file was missing or empty)
     if not shelters:
         source = "INTERNAL_EMERGENCY_BACKUP"
         shelters = [
@@ -480,7 +518,7 @@ async def fetch_shelters() -> Tuple[List[Dict[str, Any]], str]:
     return shelters, source
 
 # ---------------------------------------------------------------------------
-# Vulnerability and Routing Math
+# Vulnerability Scoring & Routing Calculations
 # ---------------------------------------------------------------------------
 
 def calculate_vulnerability(
@@ -574,7 +612,6 @@ def find_survivable_shelters(
     all_shelters: List[Dict[str, Any]],
     limit: int = MAX_SHELTERS_RETURNED,
 ) -> List[ShelterResult]:
-    # A shelter survives if its structural wind rating meets or exceeds the storm wind
     survivable = [
         s for s in all_shelters
         if float(s.get("max_wind_rating_mph") or NSS_DEFAULT_WIND_RATING_MPH) >= storm_wind_mph
@@ -611,7 +648,7 @@ def find_survivable_shelters(
 
 @app.get("/")
 async def root():
-    return {"service": "SafeHaven NC API", "version": "3.4.0", "status": "online"}
+    return {"service": "SafeHaven NC API", "version": "3.4.1", "status": "online"}
 
 @app.get("/health")
 async def health():
@@ -632,7 +669,7 @@ def debug_shelters():
     if file_exists:
         try:
             content = NC_SHELTERS_FALLBACK_PATH.read_text(encoding="utf-8")
-            raw_preview = content[:250]
+            raw_preview = content[:300]
             data = json.loads(content)
             items = data.get("features", data) if isinstance(data, dict) else data
             parsed_count = len(items) if isinstance(items, list) else 1

@@ -1,6 +1,6 @@
 """
 SafeHaven NC — Emergency Resilience and Adaptive Shelter Router
-Version 3.4.1 — Production Build with Flexible Shelter Schema Parsing
+Version 3.5.0 — Safe Radius-Constrained Shelter Routing & Statewide Coverage
 Carolina Data Challenge
 """
 
@@ -42,6 +42,7 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 REQUEST_TIMEOUT: float = 6.0
 NSS_DEFAULT_WIND_RATING_MPH: float = 120.0
 MAX_SHELTERS_RETURNED: int = 5
+MAX_SHELTER_RADIUS_MILES: float = 25.0
 
 STRUCTURE_MULTIPLIERS: Dict[str, float] = {
     "mobile_home": 2.2,
@@ -58,7 +59,7 @@ TTL_COUNTY: float = 3_600.0
 TTL_SHELTERS: float = 900.0
 
 # ---------------------------------------------------------------------------
-# 100 NC Counties Baseline (Guarantees zero missing counties)
+# Statewide 100 NC Counties Baseline
 # ---------------------------------------------------------------------------
 
 ALL_100_NC_COUNTIES: Dict[str, str] = {
@@ -89,13 +90,13 @@ ALL_100_NC_COUNTIES: Dict[str, str] = {
     "37193": "Wilkes", "37195": "Wilson", "37197": "Yadkin", "37199": "Yancey",
 }
 
-# In-memory safety net (only engaged if both live API and nc_shelters.json fail)
 EMERGENCY_FACILITY_BACKUP: List[Dict[str, Any]] = [
     {"name": "East Chapel Hill High School", "county": "Orange", "lat": 35.9542, "lon": -79.0354, "max_wind_rating_mph": 120.0, "evacuation_capacity": 450, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
     {"name": "Smith Middle School", "county": "Orange", "lat": 35.9427, "lon": -79.0805, "max_wind_rating_mph": 120.0, "evacuation_capacity": 350, "total_population": 0, "pet_friendly": False, "ada_accessible": True, "generator": True},
+    {"name": "Durham County Memorial Stadium", "county": "Durham", "lat": 36.0345, "lon": -78.8920, "max_wind_rating_mph": 130.0, "evacuation_capacity": 800, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
+    {"name": "Southern Durham High School", "county": "Durham", "lat": 35.9320, "lon": -78.8576, "max_wind_rating_mph": 120.0, "evacuation_capacity": 500, "total_population": 0, "pet_friendly": False, "ada_accessible": True, "generator": True},
     {"name": "PNC Arena / Carter-Finley Complex", "county": "Wake", "lat": 35.8033, "lon": -78.7218, "max_wind_rating_mph": 150.0, "evacuation_capacity": 1500, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
     {"name": "Southeast Raleigh Magnet High", "county": "Wake", "lat": 35.7533, "lon": -78.6012, "max_wind_rating_mph": 120.0, "evacuation_capacity": 600, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
-    {"name": "Durham County Memorial Stadium", "county": "Durham", "lat": 36.0345, "lon": -78.8920, "max_wind_rating_mph": 130.0, "evacuation_capacity": 800, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
     {"name": "Greensboro Coliseum Complex", "county": "Guilford", "lat": 36.0594, "lon": -79.8258, "max_wind_rating_mph": 140.0, "evacuation_capacity": 2200, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
     {"name": "Bojangles Coliseum Complex", "county": "Mecklenburg", "lat": 35.2045, "lon": -80.7972, "max_wind_rating_mph": 140.0, "evacuation_capacity": 2000, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
     {"name": "Trask Coliseum (UNCW)", "county": "New Hanover", "lat": 34.2257, "lon": -77.8763, "max_wind_rating_mph": 150.0, "evacuation_capacity": 1800, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
@@ -107,7 +108,7 @@ STATEWIDE_BCAT: Dict[str, Dict[str, str]] = {}
 BCAT_SOURCE: str = "FEMA_BCAT_STATEWIDE_FALLBACK"
 
 # ---------------------------------------------------------------------------
-# In-Memory TTL Cache
+# In-Memory Cache
 # ---------------------------------------------------------------------------
 
 class _CacheEntry:
@@ -227,13 +228,13 @@ async def lifespan(_app: FastAPI):
     yield
 
 # ---------------------------------------------------------------------------
-# App Setup & Models
+# App Setup & Schemas
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
     title="SafeHaven NC",
     description="Emergency resilience and adaptive shelter router — 100 NC counties.",
-    version="3.4.1",
+    version="3.5.0",
     lifespan=lifespan,
 )
 
@@ -251,6 +252,7 @@ class EvaluateRequest(BaseModel):
     year_built: int
     structure_type: str = Field(..., description="mobile_home | single_family | multi_family")
     scenario_wind_mph: Optional[float] = None
+    max_radius_miles: Optional[float] = Field(default=MAX_SHELTER_RADIUS_MILES, description="Safe shelter search radius in miles")
 
 class WeatherInfo(BaseModel):
     current_temp_f: float
@@ -294,7 +296,7 @@ class EvaluateResponse(BaseModel):
     data_sources: DataSources
 
 # ---------------------------------------------------------------------------
-# Dynamic Spatial & Shelter Resolvers
+# Resolvers & Normalizers
 # ---------------------------------------------------------------------------
 
 async def resolve_county(lat: float, lon: float) -> Tuple[Dict[str, str], str]:
@@ -368,7 +370,6 @@ def _normalize_raw_shelter(item: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(item, dict):
         return None
 
-    # Handle GeoJSON 'properties', ArcGIS 'attributes', or direct dict
     props = item.get("properties") or item.get("attributes") or item
     if not isinstance(props, dict):
         props = item
@@ -379,18 +380,15 @@ def _normalize_raw_shelter(item: Any) -> Optional[Dict[str, Any]]:
     lat: Optional[float] = None
     lon: Optional[float] = None
 
-    # GeoJSON: [lon, lat]
     if len(coords) >= 2:
         lon = _extract_coord(coords[0])
         lat = _extract_coord(coords[1])
 
-    # ArcGIS geometry: {"x": lon, "y": lat}
     if lat is None or lon is None:
         if "y" in geom and "x" in geom:
             lat = _extract_coord(geom["y"])
             lon = _extract_coord(geom["x"])
 
-    # Flat properties/attributes
     if lat is None or lon is None:
         for k in ("lat", "LAT", "latitude", "Latitude", "LATITUDE", "y", "Y"):
             if k in props and props[k] is not None:
@@ -469,7 +467,6 @@ async def fetch_shelters() -> Tuple[List[Dict[str, Any]], str]:
         "f": "geojson",
     }
 
-    # Step 1: Query live FEMA NSS service
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         try:
             resp = await client.get(NSS_SHELTERS_URL, params=params)
@@ -482,7 +479,6 @@ async def fetch_shelters() -> Tuple[List[Dict[str, Any]], str]:
         except Exception:
             pass
 
-    # Step 2: Primary local dataset fallback (nc_shelters.json)
     if not shelters and NC_SHELTERS_FALLBACK_PATH.exists():
         source = "LOCAL_STATEWIDE_INVENTORY"
         try:
@@ -502,7 +498,6 @@ async def fetch_shelters() -> Tuple[List[Dict[str, Any]], str]:
         except Exception as exc:
             print(f"[SafeHaven] Error parsing nc_shelters.json: {exc}")
 
-    # Step 3: Emergency code backup (only if file was missing or empty)
     if not shelters:
         source = "INTERNAL_EMERGENCY_BACKUP"
         shelters = [
@@ -578,6 +573,7 @@ def build_recommendation(
     bcat: Dict[str, str],
     shelters_found: int,
     storm_wind_mph: float,
+    max_radius_miles: float,
 ) -> str:
     if score >= 75:
         risk = "EVACUATE"
@@ -597,11 +593,11 @@ def build_recommendation(
 
     code_note = f" {county_name} building codes are rated '{bcat.get('bcat_wind_resistance')}'."
     if shelters_found > 0:
-        shelter_note = f" {shelters_found} designated shelter(s) available nearby."
+        shelter_note = f" {shelters_found} designated shelter(s) available within {int(max_radius_miles)} miles."
     elif storm_wind_mph >= 74.0:
-        shelter_note = " WARNING: No nearby shelters meet the peak wind threshold. Contact county emergency management."
+        shelter_note = f" WARNING: No rated shelters within {int(max_radius_miles)} miles meet the {int(storm_wind_mph)} mph wind threshold. Contact county emergency management."
     else:
-        shelter_note = " Contact local emergency management for regional sites."
+        shelter_note = f" No designated shelters located within {int(max_radius_miles)} miles. Contact local emergency management."
 
     return f"[{risk}] {action}{code_note}{shelter_note}"
 
@@ -610,21 +606,25 @@ def find_survivable_shelters(
     lon: float,
     storm_wind_mph: float,
     all_shelters: List[Dict[str, Any]],
+    max_radius_miles: float = MAX_SHELTER_RADIUS_MILES,
     limit: int = MAX_SHELTERS_RETURNED,
 ) -> List[ShelterResult]:
-    survivable = [
-        s for s in all_shelters
-        if float(s.get("max_wind_rating_mph") or NSS_DEFAULT_WIND_RATING_MPH) >= storm_wind_mph
-    ]
-
     ranked = []
-    for s in survivable:
+
+    for s in all_shelters:
+        rating = float(s.get("max_wind_rating_mph") or NSS_DEFAULT_WIND_RATING_MPH)
+        if rating < storm_wind_mph:
+            continue
+
         dist = haversine_miles(lat, lon, s["lat"], s["lon"])
+        if dist > max_radius_miles:
+            continue
+
         ranked.append(
             ShelterResult(
                 name=s["name"],
                 county=s["county"],
-                max_wind_rating_mph=float(s.get("max_wind_rating_mph") or NSS_DEFAULT_WIND_RATING_MPH),
+                max_wind_rating_mph=rating,
                 evacuation_capacity=int(s.get("evacuation_capacity", 400)),
                 remaining_capacity=int(s.get("remaining_capacity", 400)),
                 total_population=int(s.get("total_population", 0)),
@@ -648,7 +648,7 @@ def find_survivable_shelters(
 
 @app.get("/")
 async def root():
-    return {"service": "SafeHaven NC API", "version": "3.4.1", "status": "online"}
+    return {"service": "SafeHaven NC API", "version": "3.5.0", "status": "online"}
 
 @app.get("/health")
 async def health():
@@ -705,9 +705,25 @@ async def evaluate(payload: EvaluateRequest) -> EvaluateResponse:
     })
 
     storm_wind_mph = float(payload.scenario_wind_mph) if payload.scenario_wind_mph is not None else weather.wind_gusts_mph
+    radius = float(payload.max_radius_miles) if payload.max_radius_miles is not None else MAX_SHELTER_RADIUS_MILES
+
     vuln = calculate_vulnerability(payload.year_built, payload.structure_type, bcat, storm_wind_mph)
-    shelters = find_survivable_shelters(payload.lat, payload.lon, storm_wind_mph, all_shelters)
-    recommendation = build_recommendation(vuln["vulnerability_score"], county["county_name"], bcat, len(shelters), storm_wind_mph)
+    shelters = find_survivable_shelters(
+        lat=payload.lat,
+        lon=payload.lon,
+        storm_wind_mph=storm_wind_mph,
+        all_shelters=all_shelters,
+        max_radius_miles=radius,
+        limit=MAX_SHELTERS_RETURNED,
+    )
+    recommendation = build_recommendation(
+        score=vuln["vulnerability_score"],
+        county_name=county["county_name"],
+        bcat=bcat,
+        shelters_found=len(shelters),
+        storm_wind_mph=storm_wind_mph,
+        max_radius_miles=radius,
+    )
 
     return EvaluateResponse(
         county_name=county["county_name"],

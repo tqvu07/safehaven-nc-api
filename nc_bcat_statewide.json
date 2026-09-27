@@ -1,0 +1,802 @@
+[
+  {
+    "county_fips": "37001",
+    "county_name": "Alamance",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37003",
+    "county_name": "Alexander",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37005",
+    "county_name": "Alleghany",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37007",
+    "county_name": "Anson",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37009",
+    "county_name": "Ashe",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37011",
+    "county_name": "Avery",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37013",
+    "county_name": "Beaufort",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37015",
+    "county_name": "Bertie",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37017",
+    "county_name": "Bladen",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37019",
+    "county_name": "Brunswick",
+    "bcat_wind_resistance": "Resistant",
+    "bcat_flood_resistance": "Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted without weakenings"
+  },
+  {
+    "county_fips": "37021",
+    "county_name": "Buncombe",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37023",
+    "county_name": "Burke",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37025",
+    "county_name": "Cabarrus",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37027",
+    "county_name": "Caldwell",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37029",
+    "county_name": "Camden",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37031",
+    "county_name": "Carteret",
+    "bcat_wind_resistance": "Resistant",
+    "bcat_flood_resistance": "Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted without weakenings"
+  },
+  {
+    "county_fips": "37033",
+    "county_name": "Caswell",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37035",
+    "county_name": "Catawba",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37037",
+    "county_name": "Chatham",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37039",
+    "county_name": "Cherokee",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37041",
+    "county_name": "Chowan",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37043",
+    "county_name": "Clay",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37045",
+    "county_name": "Cleveland",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37047",
+    "county_name": "Columbus",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37049",
+    "county_name": "Craven",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37051",
+    "county_name": "Cumberland",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37053",
+    "county_name": "Currituck",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37055",
+    "county_name": "Dare",
+    "bcat_wind_resistance": "Resistant",
+    "bcat_flood_resistance": "Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted without weakenings"
+  },
+  {
+    "county_fips": "37057",
+    "county_name": "Davidson",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37059",
+    "county_name": "Davie",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37061",
+    "county_name": "Duplin",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37063",
+    "county_name": "Durham",
+    "bcat_wind_resistance": "Resistant",
+    "bcat_flood_resistance": "Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted without weakenings"
+  },
+  {
+    "county_fips": "37065",
+    "county_name": "Edgecombe",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37067",
+    "county_name": "Forsyth",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37069",
+    "county_name": "Franklin",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37071",
+    "county_name": "Gaston",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37073",
+    "county_name": "Gates",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37075",
+    "county_name": "Graham",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37077",
+    "county_name": "Granville",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37079",
+    "county_name": "Greene",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37081",
+    "county_name": "Guilford",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37083",
+    "county_name": "Halifax",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37085",
+    "county_name": "Harnett",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37087",
+    "county_name": "Haywood",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37089",
+    "county_name": "Henderson",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37091",
+    "county_name": "Hertford",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37093",
+    "county_name": "Hoke",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37095",
+    "county_name": "Hyde",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37097",
+    "county_name": "Iredell",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37099",
+    "county_name": "Jackson",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37101",
+    "county_name": "Johnston",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37103",
+    "county_name": "Jones",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37105",
+    "county_name": "Lee",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37107",
+    "county_name": "Lenoir",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37109",
+    "county_name": "Lincoln",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37111",
+    "county_name": "McDowell",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37113",
+    "county_name": "Macon",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37115",
+    "county_name": "Madison",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37117",
+    "county_name": "Martin",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37119",
+    "county_name": "Mecklenburg",
+    "bcat_wind_resistance": "Resistant",
+    "bcat_flood_resistance": "Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted without weakenings"
+  },
+  {
+    "county_fips": "37121",
+    "county_name": "Mitchell",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37123",
+    "county_name": "Montgomery",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37125",
+    "county_name": "Moore",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37127",
+    "county_name": "Nash",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37129",
+    "county_name": "New Hanover",
+    "bcat_wind_resistance": "Resistant",
+    "bcat_flood_resistance": "Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted without weakenings"
+  },
+  {
+    "county_fips": "37131",
+    "county_name": "Northampton",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37133",
+    "county_name": "Onslow",
+    "bcat_wind_resistance": "Resistant",
+    "bcat_flood_resistance": "Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted without weakenings"
+  },
+  {
+    "county_fips": "37135",
+    "county_name": "Orange",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37137",
+    "county_name": "Pamlico",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37139",
+    "county_name": "Pasquotank",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37141",
+    "county_name": "Pender",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37143",
+    "county_name": "Perquimans",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37145",
+    "county_name": "Person",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37147",
+    "county_name": "Pitt",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37149",
+    "county_name": "Polk",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37151",
+    "county_name": "Randolph",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37153",
+    "county_name": "Richmond",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37155",
+    "county_name": "Robeson",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37157",
+    "county_name": "Rockingham",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37159",
+    "county_name": "Rowan",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37161",
+    "county_name": "Rutherford",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37163",
+    "county_name": "Sampson",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37165",
+    "county_name": "Scotland",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37167",
+    "county_name": "Stanly",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37169",
+    "county_name": "Stokes",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37171",
+    "county_name": "Surry",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37173",
+    "county_name": "Swain",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37175",
+    "county_name": "Transylvania",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37177",
+    "county_name": "Tyrrell",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37179",
+    "county_name": "Union",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37181",
+    "county_name": "Vance",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37183",
+    "county_name": "Wake",
+    "bcat_wind_resistance": "Resistant",
+    "bcat_flood_resistance": "Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted without weakenings"
+  },
+  {
+    "county_fips": "37185",
+    "county_name": "Warren",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37187",
+    "county_name": "Washington",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37189",
+    "county_name": "Watauga",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37191",
+    "county_name": "Wayne",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37193",
+    "county_name": "Wilkes",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37195",
+    "county_name": "Wilson",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37197",
+    "county_name": "Yadkin",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  },
+  {
+    "county_fips": "37199",
+    "county_name": "Yancey",
+    "bcat_wind_resistance": "Not Resistant",
+    "bcat_flood_resistance": "Not Resistant",
+    "building_code_era": "2018 NC State Residential Code",
+    "bcat_status": "Adopted with standard amendments"
+  }
+]

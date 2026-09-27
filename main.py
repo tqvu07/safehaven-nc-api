@@ -1,6 +1,6 @@
 """
 SafeHaven NC — Emergency Resilience and Adaptive Shelter Router
-Version 3.6.0 — Adaptive Concentric Ring Routing (25mi -> 50mi -> 100mi)
+Version 3.7.0 — Live Dual-Tier (FEMA NSS + NC OneMap) Statewide Routing
 Carolina Data Challenge
 """
 
@@ -33,9 +33,15 @@ CENSUS_COUNTY_URL = (
 FEMA_BCAT_URL = (
     "https://gis.fema.gov/arcgis/rest/services/FEMA/BCAT_County/MapServer/0/query"
 )
+# Tier 1: Active federal emergency declarations only
 NSS_SHELTERS_URL = (
     "https://services1.arcgis.com/Hp6G80Pky0om7QvQ/arcgis/rest/services/"
     "National_Shelter_System_Open_Shelters/FeatureServer/0/query"
+)
+# Tier 2: Official NC State 2,447 designated public shelters layer (live 24/7)
+NC_ONEMAP_SHELTERS_URL = (
+    "https://services.nconemap.gov/secure/rest/services/"
+    "NC1Map_Emergency_Law_Enforcement/MapServer/2/query"
 )
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
@@ -57,7 +63,7 @@ STRUCTURE_BASE_VALUE_USD: Dict[str, int] = {
 }
 
 TTL_COUNTY: float = 3_600.0
-TTL_SHELTERS: float = 900.0
+TTL_SHELTERS: float = 1_800.0  # 30 min cache for state facility pool
 
 # ---------------------------------------------------------------------------
 # Statewide 100 NC Counties Baseline
@@ -91,13 +97,12 @@ ALL_100_NC_COUNTIES: Dict[str, str] = {
     "37193": "Wilkes", "37195": "Wilson", "37197": "Yadkin", "37199": "Yancey",
 }
 
+# Guaranteed regional safety net
 EMERGENCY_FACILITY_BACKUP: List[Dict[str, Any]] = [
     {"name": "East Chapel Hill High School", "county": "Orange", "lat": 35.9542, "lon": -79.0354, "max_wind_rating_mph": 120.0, "evacuation_capacity": 450, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
     {"name": "Smith Middle School", "county": "Orange", "lat": 35.9427, "lon": -79.0805, "max_wind_rating_mph": 120.0, "evacuation_capacity": 350, "total_population": 0, "pet_friendly": False, "ada_accessible": True, "generator": True},
     {"name": "Durham County Memorial Stadium", "county": "Durham", "lat": 36.0345, "lon": -78.8920, "max_wind_rating_mph": 130.0, "evacuation_capacity": 800, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
-    {"name": "Southern Durham High School", "county": "Durham", "lat": 35.9320, "lon": -78.8576, "max_wind_rating_mph": 120.0, "evacuation_capacity": 500, "total_population": 0, "pet_friendly": False, "ada_accessible": True, "generator": True},
     {"name": "PNC Arena / Carter-Finley Complex", "county": "Wake", "lat": 35.8033, "lon": -78.7218, "max_wind_rating_mph": 150.0, "evacuation_capacity": 1500, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
-    {"name": "Southeast Raleigh Magnet High", "county": "Wake", "lat": 35.7533, "lon": -78.6012, "max_wind_rating_mph": 120.0, "evacuation_capacity": 600, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
     {"name": "Greensboro Coliseum Complex", "county": "Guilford", "lat": 36.0594, "lon": -79.8258, "max_wind_rating_mph": 140.0, "evacuation_capacity": 2200, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
     {"name": "Bojangles Coliseum Complex", "county": "Mecklenburg", "lat": 35.2045, "lon": -80.7972, "max_wind_rating_mph": 140.0, "evacuation_capacity": 2000, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
     {"name": "Trask Coliseum (UNCW)", "county": "New Hanover", "lat": 34.2257, "lon": -77.8763, "max_wind_rating_mph": 150.0, "evacuation_capacity": 1800, "total_population": 0, "pet_friendly": True, "ada_accessible": True, "generator": True},
@@ -235,7 +240,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="SafeHaven NC",
     description="Emergency resilience and adaptive shelter router — 100 NC counties.",
-    version="3.6.0",
+    version="3.7.0",
     lifespan=lifespan,
 )
 
@@ -298,7 +303,7 @@ class EvaluateResponse(BaseModel):
     data_sources: DataSources
 
 # ---------------------------------------------------------------------------
-# Resolvers & Normalizers
+# Resolvers & Dual-Tier Live Shelter Ingestion
 # ---------------------------------------------------------------------------
 
 async def resolve_county(lat: float, lon: float) -> Tuple[Dict[str, str], str]:
@@ -409,8 +414,8 @@ def _normalize_raw_shelter(item: Any) -> Optional[Dict[str, Any]]:
     name = (
         props.get("name")
         or props.get("SHELTER_NAME")
+        or props.get("BLDG_NAME")
         or props.get("FACILITY_NAME")
-        or props.get("FACILITY_N")
         or props.get("NAME")
         or "Emergency Shelter"
     )
@@ -419,12 +424,10 @@ def _normalize_raw_shelter(item: Any) -> Optional[Dict[str, Any]]:
         props.get("county")
         or props.get("COUNTY")
         or props.get("COUNTY_NAME")
-        or props.get("COUNTY_NAM")
-        or props.get("JURISDICTION")
         or "NC"
     )
 
-    raw_rating = props.get("max_wind_rating_mph") or props.get("WIND_RATING_MPH") or props.get("WIND_RATING")
+    raw_rating = props.get("max_wind_rating_mph") or props.get("WIND_RATING_MPH")
     try:
         rating = float(raw_rating) if raw_rating and float(raw_rating) > 0 else NSS_DEFAULT_WIND_RATING_MPH
     except (ValueError, TypeError):
@@ -435,14 +438,14 @@ def _normalize_raw_shelter(item: Any) -> Optional[Dict[str, Any]]:
         or props.get("EVACUATION_CAPACITY")
         or props.get("CAPACITY")
         or props.get("capacity")
-        or 400
+        or 450
     )
-    pop = int(props.get("total_population") or props.get("TOTAL_POPULATION") or props.get("POPULATION") or 0)
+    pop = int(props.get("total_population") or props.get("TOTAL_POPULATION") or 0)
     status = str(props.get("shelter_status") or props.get("SHELTER_STATUS") or "DESIGNATED").upper()
 
     return {
-        "name": str(name).strip(),
-        "county": str(county).strip(),
+        "name": str(name).strip().title(),
+        "county": str(county).strip().title(),
         "lat": lat,
         "lon": lon,
         "max_wind_rating_mph": rating,
@@ -456,63 +459,113 @@ def _normalize_raw_shelter(item: Any) -> Optional[Dict[str, Any]]:
     }
 
 async def fetch_shelters() -> Tuple[List[Dict[str, Any]], str]:
-    cached = cache_get("nss_shelters")
+    cached = cache_get("statewide_shelters_live")
     if cached and len(cached[0]) > 0:
         return cached
 
     shelters: List[Dict[str, Any]] = []
-    source = "FEMA_NSS_LIVE"
 
-    params = {
+    # -----------------------------------------------------------------------
+    # Tier 1: Live FEMA NSS Feed (Active incident declarations only)
+    # -----------------------------------------------------------------------
+    fema_params = {
         "where": "STATE = 'NC'",
         "outFields": "*",
         "f": "geojson",
     }
-
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
         try:
-            resp = await client.get(NSS_SHELTERS_URL, params=params)
+            resp = await client.get(NSS_SHELTERS_URL, params=fema_params)
             if resp.status_code == 200:
                 features = resp.json().get("features", [])
                 for feat in features:
                     norm = _normalize_raw_shelter(feat)
                     if norm:
                         shelters.append(norm)
+                if shelters:
+                    cache_set("statewide_shelters_live", (shelters, "FEMA_NSS_LIVE"), TTL_SHELTERS)
+                    return shelters, "FEMA_NSS_LIVE"
         except Exception:
             pass
 
-    if not shelters and NC_SHELTERS_FALLBACK_PATH.exists():
-        source = "LOCAL_STATEWIDE_INVENTORY"
+    # -----------------------------------------------------------------------
+    # Tier 2: NC OneMap Statewide Potential Emergency Shelters Layer (2,447 sites)
+    # -----------------------------------------------------------------------
+    nc_params = {
+        "where": "1=1",
+        "outFields": "BLDG_NAME,CITY,COUNTY,CAPACITY,BLDG_TYPE,ADDRESS",
+        "returnGeometry": "true",
+        "outSR": "4326",
+        "resultRecordCount": 2000,
+        "f": "json",
+    }
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        try:
+            resp = await client.get(NC_ONEMAP_SHELTERS_URL, params=nc_params)
+            if resp.status_code == 200:
+                features = resp.json().get("features", [])
+                for feat in features:
+                    attrs = feat.get("attributes", {})
+                    geom = feat.get("geometry", {})
+                    lon = geom.get("x")
+                    lat = geom.get("y")
+                    if lat is None or lon is None:
+                        continue
+
+                    raw_cap = str(attrs.get("CAPACITY") or "").strip()
+                    capacity = int(raw_cap) if raw_cap.isdigit() and int(raw_cap) > 0 else 450
+
+                    shelters.append({
+                        "name": str(attrs.get("BLDG_NAME") or "Designated Emergency Shelter").title(),
+                        "county": str(attrs.get("COUNTY") or "NC").title(),
+                        "lat": float(lat),
+                        "lon": float(lon),
+                        "max_wind_rating_mph": NSS_DEFAULT_WIND_RATING_MPH,
+                        "evacuation_capacity": capacity,
+                        "total_population": 0,
+                        "remaining_capacity": capacity,
+                        "shelter_status": "DESIGNATED",
+                        "pet_friendly": False,
+                        "ada_accessible": True,
+                        "generator": True,
+                    })
+
+                if shelters:
+                    cache_set("statewide_shelters_live", (shelters, "NC_ONEMAP_STATEWIDE_DESIGNATED"), TTL_SHELTERS)
+                    return shelters, "NC_ONEMAP_STATEWIDE_DESIGNATED"
+        except Exception as exc:
+            print(f"[SafeHaven] NC OneMap query error: {exc}")
+
+    # -----------------------------------------------------------------------
+    # Tier 3: Local file fallback (nc_shelters.json)
+    # -----------------------------------------------------------------------
+    if NC_SHELTERS_FALLBACK_PATH.exists():
         try:
             raw_text = NC_SHELTERS_FALLBACK_PATH.read_text(encoding="utf-8")
             raw_data = json.loads(raw_text)
+            items = raw_data.get("features", raw_data) if isinstance(raw_data, dict) else raw_data
+            if isinstance(items, list):
+                for item in items:
+                    norm = _normalize_raw_shelter(item)
+                    if norm:
+                        shelters.append(norm)
+            if shelters:
+                return shelters, "LOCAL_STATEWIDE_INVENTORY"
+        except Exception:
+            pass
 
-            items = []
-            if isinstance(raw_data, dict):
-                items = raw_data.get("features", []) or raw_data.get("records", []) or [raw_data]
-            elif isinstance(raw_data, list):
-                items = raw_data
-
-            for item in items:
-                norm = _normalize_raw_shelter(item)
-                if norm:
-                    shelters.append(norm)
-        except Exception as exc:
-            print(f"[SafeHaven] Error parsing nc_shelters.json: {exc}")
-
-    if not shelters:
-        source = "INTERNAL_EMERGENCY_BACKUP"
-        shelters = [
-            {
-                **s,
-                "remaining_capacity": max(0, s["evacuation_capacity"] - s["total_population"]),
-                "shelter_status": "DESIGNATED",
-            }
-            for s in EMERGENCY_FACILITY_BACKUP
-        ]
-
-    cache_set("nss_shelters", (shelters, source), TTL_SHELTERS)
-    return shelters, source
+    # -----------------------------------------------------------------------
+    # Tier 4: Internal regional safety net
+    # -----------------------------------------------------------------------
+    shelters = [
+        {
+            **s,
+            "remaining_capacity": max(0, s["evacuation_capacity"] - s["total_population"]),
+            "shelter_status": "DESIGNATED",
+        }
+        for s in EMERGENCY_FACILITY_BACKUP
+    ]
+    return shelters, "INTERNAL_EMERGENCY_BACKUP"
 
 # ---------------------------------------------------------------------------
 # Vulnerability Scoring & Adaptive Routing Calculations
@@ -620,10 +673,6 @@ def find_survivable_shelters_adaptive(
     max_expanded_radius_miles: float = MAX_EXPANDED_RADIUS_MILES,
     limit: int = MAX_SHELTERS_RETURNED,
 ) -> Tuple[List[ShelterResult], float]:
-    """
-    Progressively searches concentric rings (initial -> 50mi -> 100mi)
-    to ensure rural or edge-of-county locations receive a survivable shelter.
-    """
     survivable = [
         s for s in all_shelters
         if float(s.get("max_wind_rating_mph") or NSS_DEFAULT_WIND_RATING_MPH) >= storm_wind_mph
@@ -636,7 +685,6 @@ def find_survivable_shelters_adaptive(
 
     candidates.sort(key=lambda pair: pair[0])
 
-    # Distinct progressive search radii
     tiers = [initial_radius_miles]
     if initial_radius_miles < 50.0:
         tiers.append(50.0)
@@ -683,7 +731,7 @@ def find_survivable_shelters_adaptive(
 
 @app.get("/")
 async def root():
-    return {"service": "SafeHaven NC API", "version": "3.6.0", "status": "online"}
+    return {"service": "SafeHaven NC API", "version": "3.7.0", "status": "online"}
 
 @app.get("/health")
 async def health():
@@ -691,32 +739,19 @@ async def health():
 
 @app.get("/api/shelters")
 async def get_shelters():
-    shelters, _ = await fetch_shelters()
-    return shelters
+    shelters, source = await fetch_shelters()
+    return {"count": len(shelters), "source": source, "shelters": shelters[:50]}
 
 @app.get("/api/debug-shelters")
 def debug_shelters():
     file_exists = NC_SHELTERS_FALLBACK_PATH.exists()
     file_size = os.path.getsize(NC_SHELTERS_FALLBACK_PATH) if file_exists else 0
-    raw_preview = ""
-    parsed_count = 0
-    parse_error = None
-    if file_exists:
-        try:
-            content = NC_SHELTERS_FALLBACK_PATH.read_text(encoding="utf-8")
-            raw_preview = content[:300]
-            data = json.loads(content)
-            items = data.get("features", data) if isinstance(data, dict) else data
-            parsed_count = len(items) if isinstance(items, list) else 1
-        except Exception as e:
-            parse_error = str(e)
     return {
         "file_path": str(NC_SHELTERS_FALLBACK_PATH),
         "file_exists": file_exists,
         "file_size_bytes": file_size,
-        "items_in_raw_json": parsed_count,
-        "parse_error": parse_error,
-        "raw_preview": raw_preview,
+        "primary_live_source": "FEMA_NSS_LIVE",
+        "secondary_live_source": "NC_ONEMAP_STATEWIDE_DESIGNATED",
     }
 
 @app.post("/api/evaluate", response_model=EvaluateResponse)

@@ -1,6 +1,6 @@
 """
 SafeHaven NC — Emergency Resilience and Adaptive Shelter Router
-Version 3.5.0 — Safe Radius-Constrained Shelter Routing & Statewide Coverage
+Version 3.6.0 — Adaptive Concentric Ring Routing (25mi -> 50mi -> 100mi)
 Carolina Data Challenge
 """
 
@@ -42,7 +42,8 @@ OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 REQUEST_TIMEOUT: float = 6.0
 NSS_DEFAULT_WIND_RATING_MPH: float = 120.0
 MAX_SHELTERS_RETURNED: int = 5
-MAX_SHELTER_RADIUS_MILES: float = 25.0
+DEFAULT_INITIAL_RADIUS_MILES: float = 25.0
+MAX_EXPANDED_RADIUS_MILES: float = 100.0
 
 STRUCTURE_MULTIPLIERS: Dict[str, float] = {
     "mobile_home": 2.2,
@@ -234,7 +235,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="SafeHaven NC",
     description="Emergency resilience and adaptive shelter router — 100 NC counties.",
-    version="3.5.0",
+    version="3.6.0",
     lifespan=lifespan,
 )
 
@@ -252,7 +253,7 @@ class EvaluateRequest(BaseModel):
     year_built: int
     structure_type: str = Field(..., description="mobile_home | single_family | multi_family")
     scenario_wind_mph: Optional[float] = None
-    max_radius_miles: Optional[float] = Field(default=MAX_SHELTER_RADIUS_MILES, description="Safe shelter search radius in miles")
+    max_radius_miles: Optional[float] = Field(default=DEFAULT_INITIAL_RADIUS_MILES, description="Initial shelter search radius in miles")
 
 class WeatherInfo(BaseModel):
     current_temp_f: float
@@ -280,6 +281,7 @@ class DataSources(BaseModel):
     county_resolution: str
     bcat_rating: str
     shelter_source: str
+    effective_search_radius_miles: float
 
 class EvaluateResponse(BaseModel):
     county_name: str
@@ -513,7 +515,7 @@ async def fetch_shelters() -> Tuple[List[Dict[str, Any]], str]:
     return shelters, source
 
 # ---------------------------------------------------------------------------
-# Vulnerability Scoring & Routing Calculations
+# Vulnerability Scoring & Adaptive Routing Calculations
 # ---------------------------------------------------------------------------
 
 def calculate_vulnerability(
@@ -573,7 +575,8 @@ def build_recommendation(
     bcat: Dict[str, str],
     shelters_found: int,
     storm_wind_mph: float,
-    max_radius_miles: float,
+    effective_radius_miles: float,
+    initial_radius_miles: float,
 ) -> str:
     if score >= 75:
         risk = "EVACUATE"
@@ -592,35 +595,68 @@ def build_recommendation(
         )
 
     code_note = f" {county_name} building codes are rated '{bcat.get('bcat_wind_resistance')}'."
+
     if shelters_found > 0:
-        shelter_note = f" {shelters_found} designated shelter(s) available within {int(max_radius_miles)} miles."
+        if effective_radius_miles > initial_radius_miles:
+            shelter_note = (
+                f" Notice: No open facilities were found within {int(initial_radius_miles)} miles. "
+                f"Expanded search to {int(effective_radius_miles)} miles identified {shelters_found} regional shelter(s)."
+            )
+        else:
+            shelter_note = f" {shelters_found} designated shelter(s) available within {int(effective_radius_miles)} miles."
     elif storm_wind_mph >= 74.0:
-        shelter_note = f" WARNING: No rated shelters within {int(max_radius_miles)} miles meet the {int(storm_wind_mph)} mph wind threshold. Contact county emergency management."
+        shelter_note = f" WARNING: No rated shelters within {int(effective_radius_miles)} miles meet the {int(storm_wind_mph)} mph wind threshold. Contact county emergency management."
     else:
-        shelter_note = f" No designated shelters located within {int(max_radius_miles)} miles. Contact local emergency management."
+        shelter_note = f" No designated shelters located within {int(effective_radius_miles)} miles. Contact local emergency management."
 
     return f"[{risk}] {action}{code_note}{shelter_note}"
 
-def find_survivable_shelters(
+def find_survivable_shelters_adaptive(
     lat: float,
     lon: float,
     storm_wind_mph: float,
     all_shelters: List[Dict[str, Any]],
-    max_radius_miles: float = MAX_SHELTER_RADIUS_MILES,
+    initial_radius_miles: float = DEFAULT_INITIAL_RADIUS_MILES,
+    max_expanded_radius_miles: float = MAX_EXPANDED_RADIUS_MILES,
     limit: int = MAX_SHELTERS_RETURNED,
-) -> List[ShelterResult]:
-    ranked = []
+) -> Tuple[List[ShelterResult], float]:
+    """
+    Progressively searches concentric rings (initial -> 50mi -> 100mi)
+    to ensure rural or edge-of-county locations receive a survivable shelter.
+    """
+    survivable = [
+        s for s in all_shelters
+        if float(s.get("max_wind_rating_mph") or NSS_DEFAULT_WIND_RATING_MPH) >= storm_wind_mph
+    ]
 
-    for s in all_shelters:
-        rating = float(s.get("max_wind_rating_mph") or NSS_DEFAULT_WIND_RATING_MPH)
-        if rating < storm_wind_mph:
-            continue
-
+    candidates = []
+    for s in survivable:
         dist = haversine_miles(lat, lon, s["lat"], s["lon"])
-        if dist > max_radius_miles:
-            continue
+        candidates.append((dist, s))
 
-        ranked.append(
+    candidates.sort(key=lambda pair: pair[0])
+
+    # Distinct progressive search radii
+    tiers = [initial_radius_miles]
+    if initial_radius_miles < 50.0:
+        tiers.append(50.0)
+    if max_expanded_radius_miles > tiers[-1]:
+        tiers.append(max_expanded_radius_miles)
+
+    matched = []
+    effective_radius = tiers[-1]
+
+    for tier in tiers:
+        in_tier = [pair for pair in candidates if pair[0] <= tier]
+        if in_tier:
+            matched = in_tier
+            effective_radius = tier
+            break
+
+    results = []
+    for dist, s in matched[:limit]:
+        rating = float(s.get("max_wind_rating_mph") or NSS_DEFAULT_WIND_RATING_MPH)
+        results.append(
             ShelterResult(
                 name=s["name"],
                 county=s["county"],
@@ -639,8 +675,7 @@ def find_survivable_shelters(
             )
         )
 
-    ranked.sort(key=lambda x: x.distance_miles)
-    return ranked[:limit]
+    return results, effective_radius
 
 # ---------------------------------------------------------------------------
 # API Endpoints
@@ -648,7 +683,7 @@ def find_survivable_shelters(
 
 @app.get("/")
 async def root():
-    return {"service": "SafeHaven NC API", "version": "3.5.0", "status": "online"}
+    return {"service": "SafeHaven NC API", "version": "3.6.0", "status": "online"}
 
 @app.get("/health")
 async def health():
@@ -705,15 +740,16 @@ async def evaluate(payload: EvaluateRequest) -> EvaluateResponse:
     })
 
     storm_wind_mph = float(payload.scenario_wind_mph) if payload.scenario_wind_mph is not None else weather.wind_gusts_mph
-    radius = float(payload.max_radius_miles) if payload.max_radius_miles is not None else MAX_SHELTER_RADIUS_MILES
+    initial_radius = float(payload.max_radius_miles) if payload.max_radius_miles is not None else DEFAULT_INITIAL_RADIUS_MILES
 
     vuln = calculate_vulnerability(payload.year_built, payload.structure_type, bcat, storm_wind_mph)
-    shelters = find_survivable_shelters(
+    shelters, effective_radius = find_survivable_shelters_adaptive(
         lat=payload.lat,
         lon=payload.lon,
         storm_wind_mph=storm_wind_mph,
         all_shelters=all_shelters,
-        max_radius_miles=radius,
+        initial_radius_miles=initial_radius,
+        max_expanded_radius_miles=MAX_EXPANDED_RADIUS_MILES,
         limit=MAX_SHELTERS_RETURNED,
     )
     recommendation = build_recommendation(
@@ -722,7 +758,8 @@ async def evaluate(payload: EvaluateRequest) -> EvaluateResponse:
         bcat=bcat,
         shelters_found=len(shelters),
         storm_wind_mph=storm_wind_mph,
-        max_radius_miles=radius,
+        effective_radius_miles=effective_radius,
+        initial_radius_miles=initial_radius,
     )
 
     return EvaluateResponse(
@@ -741,6 +778,7 @@ async def evaluate(payload: EvaluateRequest) -> EvaluateResponse:
             county_resolution=county_source,
             bcat_rating=BCAT_SOURCE,
             shelter_source=shelter_source,
+            effective_search_radius_miles=effective_radius,
         ),
     )
 
